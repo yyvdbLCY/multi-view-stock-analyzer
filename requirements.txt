@@ -11,3 +11,4 @@ httpx>=0.27.0
 
 # Optional: only needed if ENABLE_WHISPER_FALLBACK=true
 # openai-whisper>=20231117
+youtube-transcript-api

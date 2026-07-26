@@ -154,7 +154,7 @@ def _split_message(text: str, max_len: int = 3500) -> list[str]:
 # ---------------------------------------------------------------------------
 # Pipeline (single video)
 # ---------------------------------------------------------------------------
-async def run_pipeline_for_video(url: str) -> dict:
+def run_pipeline_for_video(url: str) -> dict:
     """Runs: fetch -> extract -> save. Returns summary dict.
 
     This function is CPU/IO-bound; call it via loop.run_in_executor from

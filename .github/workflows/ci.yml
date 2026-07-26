@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  syntax-check:
+    name: Python syntax check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Compile-check all modules
+        run: |
+          python -m compileall -q . && echo "OK: all .py files compile cleanly"
+      - name: JSON sanity (prompts / env)
+        run: |
+          python -c "import ast; [ast.parse(open(f).read()) for f in ['main.py','config.py','prompts.py','youtube_client.py','extractor.py','aggregator.py','evaluator.py','stock_client.py','storage.py']]; print('AST OK')"
+
+  lint:
+    name: Ruff lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install ruff
+        run: pip install ruff==0.6.9
+      - name: Lint
+        run: ruff check . || true  # soft-fail on first pass

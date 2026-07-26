@@ -22,6 +22,9 @@ jobs:
       - name: JSON sanity (prompts / env)
         run: |
           python -c "import ast; [ast.parse(open(f).read()) for f in ['main.py','config.py','prompts.py','youtube_client.py','extractor.py','aggregator.py','evaluator.py','stock_client.py','storage.py']]; print('AST OK')"
+      - name: Workflow YAML sanity
+        run: |
+          python -c "import yaml,glob; [yaml.safe_load(open(p)) for p in glob.glob('.github/workflows/*.yml')]; print('Workflow YAML OK')"
 
   lint:
     name: Ruff lint

@@ -209,6 +209,22 @@ multi-view-stock-analyzer/
 
 ## 進階設定
 
+### 🧪 GitHub Actions 雲端 E2E Smoke Test (推薦先用這個驗證 pipeline)
+
+不想本地裝依賴?用 GitHub Actions 在雲端跑一次完整 pipeline:
+
+1. 進 repo → **Actions** tab
+2. 選 **"Smoke Test (E2E)"** workflow
+3. 點 **"Run workflow"** → 貼個 YouTube URL (或用預設) → 選要不要推 Telegram
+4. 等 30-60 秒,下載 artifacts (`transcript.txt` / `extractions.json` / `report.json` / `summary.md`)
+
+**前置條件** (只設一次):
+- `GEMINI_API_KEY` (Actions secret)
+- `TELEGRAM_BOT_TOKEN` (如果你想推到 Telegram)
+- `TELEGRAM_ALLOWED_USER_IDS` (你的 Telegram user ID)
+
+> ⚠️ 注意:這個 workflow 適合偶爾驗證 / 測試 prompt 改動。**不要拿來跑 24/7 bot** — 那是 polling server 場景,GitHub Actions 不適合 hosting 長期服務。
+
 ### 換更好的模型 (但更貴)
 
 ```env

@@ -1,0 +1,178 @@
+name: Smoke Test (E2E)
+
+# Manual-trigger E2E smoke test for the multi-view-stock-analyzer pipeline.
+#
+# Usage:
+#   1. Go to GitHub repo → Actions tab → "Smoke Test (E2E)" → Run workflow
+#   2. Paste a YouTube URL when prompted
+#   3. Wait 30-60s, see logs and download artifacts (transcript + JSON report)
+#
+# What it does:
+#   1. Fetches the video transcript via yt-dlp
+#   2. Runs Layer 1 extraction (per-ticker JSON)
+#   3. Runs Layer 2 synthesis (confidence-scored report)
+#   4. (Optional) Sends the report to your Telegram
+#   5. Uploads all artifacts (transcript.txt, extractions.json, report.json) for download
+
+on:
+  workflow_dispatch:
+    inputs:
+      youtube_url:
+        description: "YouTube URL to test (default: a Tesla Q3 video)"
+        required: false
+        type: string
+        default: "https://www.youtube.com/watch?v=ZS_O5j_Z6mw"
+      send_telegram:
+        description: "Send the final report to Telegram?"
+        required: false
+        type: choice
+        default: "true"
+        options:
+          - "true"
+          - "false"
+
+jobs:
+  smoke-test:
+    name: E2E pipeline smoke test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run pipeline (fetch + extract + synthesize)
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL_EXTRACT: gemini-2.0-flash
+          GEMINI_MODEL_EVAL: gemini-2.0-flash
+        run: |
+          mkdir -p artifacts
+          python -c "
+          import json
+          import sys
+          import traceback
+          from pathlib import Path
+          from config import settings
+          from youtube_client import fetch_video
+          from extractor import extract_stocks_from_transcript
+          from evaluator import synthesize_ticker
+          import storage
+
+          url = '''${{ inputs.youtube_url }}'''
+          print(f'==Pipeline target: {url}==')
+          print()
+
+          # 1. Fetch
+          print('Step 1/3: fetch_video ...')
+          try:
+              info = fetch_video(url)
+          except Exception as e:
+              print(f'FETCH FAILED: {e}')
+              Path('artifacts/FAIL.txt').write_text(str(e))
+              sys.exit(2)
+          print(f'  title: {info.title}')
+          print(f'  channel: {info.channel}')
+          print(f'  caption_source: {info.caption_source}')
+          print(f'  transcript_chars: {len(info.transcript)}')
+          (Path('artifacts') / 'transcript.txt').write_text(info.transcript)
+
+          # 2. Extract
+          print()
+          print('Step 2/3: extract_stocks_from_transcript ...')
+          stocks = extract_stocks_from_transcript(
+              info.title, info.channel, info.published, info.transcript
+          )
+          print(f'  extracted {len(stocks)} stocks')
+          (Path('artifacts') / 'extractions.json').write_text(
+              json.dumps(stocks, ensure_ascii=False, indent=2)
+          )
+          for s in stocks:
+              print(f'  - {s[\"ticker\"]}: {s[\"sentiment\"]} ({s[\"speaker_confidence\"]})')
+
+          if not stocks:
+              print('No stocks extracted. Pipeline ends here.')
+              Path('artifacts/NO_STOCKS.txt').write_text(
+                  f'Video {info.video_id} mentioned no extractable US stocks.'
+              )
+              sys.exit(0)
+
+          # 3. Synthesize
+          print()
+          print('Step 3/3: synthesize_ticker (per-ticker reports) ...')
+          from aggregator import aggregate_for_ticker
+          from main import _fmt_report
+
+          all_reports = []
+          for s in stocks:
+              ticker = s['ticker']
+              bundle = aggregate_for_ticker(ticker)
+              report = synthesize_ticker(bundle)
+              all_reports.append(report)
+              print(f'  - {ticker}: score={report.get(\"overall_score\")}, conf={report.get(\"confidence\")}')
+
+          # Sort by confidence desc
+          all_reports.sort(key=lambda r: -(r.get('confidence') or 0))
+          (Path('artifacts') / 'report.json').write_text(
+              json.dumps(all_reports, ensure_ascii=False, indent=2)
+          )
+
+          # Save a human-readable summary
+          summary_lines = [f'# E2E Smoke Test Report', f'Video: {info.title}', f'Channel: {info.channel}', '']
+          for r in all_reports:
+              summary_lines.append(_fmt_report(r))
+              summary_lines.append('\n---\n')
+          (Path('artifacts') / 'summary.md').write_text('\n'.join(summary_lines))
+          print()
+          print('==Done. Artifacts written.==')
+          "
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-test-output
+          path: artifacts/
+          if-no-files-found: warn
+
+      - name: Send to Telegram
+        if: inputs.send_telegram == 'true' && hashFiles('artifacts/summary.md') != ''
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_ALLOWED_USER_IDS }}
+        run: |
+          python -c "
+          import os
+          import urllib.request
+          import urllib.parse
+          from pathlib import Path
+
+          token = os.environ['TELEGRAM_BOT_TOKEN']
+          chat_id = os.environ['TELEGRAM_CHAT_ID']
+          text = Path('artifacts/summary.md').read_text()
+
+          # Telegram max 4096 chars per message
+          for i in range(0, len(text), 4000):
+              chunk = text[i:i+4000]
+              data = urllib.parse.urlencode({
+                  'chat_id': chat_id,
+                  'text': chunk,
+                  'parse_mode': 'Markdown',
+                  'disable_web_page_preview': 'true',
+              }).encode()
+              req = urllib.request.Request(
+                  f'https://api.telegram.org/bot{token}/sendMessage',
+                  data=data,
+              )
+              with urllib.request.urlopen(req, timeout=30) as r:
+                  print(f'  sent chunk {i//4000 + 1}: HTTP {r.status}')
+          "

@@ -198,6 +198,17 @@ async def webhook(request: Request) -> dict:
     if update is None:
         raise HTTPException(status_code=400, detail="Invalid Update object")
 
+    # DEBUG: log the sender's user_id so we can see who's actually hitting
+    # the webhook. Useful when TELEGRAM_ALLOWED_USER_IDS is misconfigured.
+    if update.effective_user:
+        logger.info(
+            f"webhook update from user_id={update.effective_user.id} "
+            f"username=@{update.effective_user.username} "
+            f"chat_id={update.effective_chat.id if update.effective_chat else None}"
+        )
+    else:
+        logger.info(f"webhook update (no effective_user): {update.update_id}")
+
     try:
         await bot_app.process_update(update)
     except Exception as e:

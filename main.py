@@ -432,7 +432,7 @@ def main() -> None:
     # Catch everything else text
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_unknown))
 
-    logger.info("Bot starting up...")
+    logger.info("Bot starting up (POLLING mode — local)...")
     logger.info(f"Authorized user IDs: {settings.telegram_allowed_user_ids}")
     logger.info(f"DB path: {settings.db_path}")
     logger.info(f"Reports dir: {settings.reports_dir}")

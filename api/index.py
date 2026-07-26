@@ -126,6 +126,53 @@ async def health() -> dict:
     return {"ok": True, "ts": asyncio.get_event_loop().time()}
 
 
+@app.get("/api/set_webhook")
+async def set_webhook_endpoint(request: Request) -> dict:
+    """One-shot helper to register this deployment as the bot's webhook.
+
+    Hits Telegram's setWebhook API pointing at this deployment's
+    /api/webhook URL. Vercel can reach api.telegram.org, so we use the
+    bot token stored in env vars to register ourselves.
+
+    Usage (one-time, after deploy):
+        curl https://<your-deployment>.vercel.app/api/set_webhook
+
+    For production: hit the aliased URL (multi-view-stock-analyzer.vercel.app).
+    """
+    if not config.settings.telegram_bot_token:
+        raise HTTPException(status_code=500, detail="TELEGRAM_BOT_TOKEN not set")
+
+    # Derive public URL: prefer x-forwarded-proto/host headers, fallback to env
+    proto = request.headers.get("x-forwarded-proto", "https")
+    host = request.headers.get("host") or request.headers.get("x-vercel-deployment-url", "")
+    public_url = f"{proto}://{host}/api/webhook"
+
+    # Call Telegram's setWebhook via raw HTTPS (avoid extra deps)
+    import json as _json
+    import urllib.request
+    import urllib.parse
+
+    telegram_url = f"https://api.telegram.org/bot{config.settings.telegram_bot_token}/setWebhook"
+    data = urllib.parse.urlencode({"url": public_url}).encode()
+    req = urllib.request.Request(telegram_url, data=data, method="POST")
+    with urllib.request.urlopen(req, timeout=15) as r:
+        body = r.read().decode("utf-8")
+        telegram_resp = _json.loads(body)
+
+    # Also fetch the webhook info for confirmation
+    info_url = f"https://api.telegram.org/bot{config.settings.telegram_bot_token}/getWebhookInfo"
+    with urllib.request.urlopen(info_url, timeout=15) as r:
+        info_body = r.read().decode("utf-8")
+        info = _json.loads(info_body)
+
+    return {
+        "ok": telegram_resp.get("ok", False),
+        "webhook_url": public_url,
+        "telegram_response": telegram_resp,
+        "webhook_info": info.get("result", {}),
+    }
+
+
 @app.post("/api/webhook")
 async def webhook(request: Request) -> dict:
     """Receive a Telegram update and dispatch it to the bot's handlers."""

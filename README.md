@@ -2,6 +2,8 @@
 
 > **YouTube 美股觀點分析機器人** — 把多個財經 YouTuber 的影片字幕抓下來,用 Gemini 做雙層 LLM 評測,最後透過 Telegram 推送**附置信度的結論**給你。
 
+> 💡 **這是怎麼做出來的** — 從 2026-07-26 用戶給的系統框架(雙層 LLM 評測 + 置信度)開始,Mavis 把它落地成 9 個 Python 模組,並推上 GitHub 作為 MVP。完整開發筆記見 [ARCHITECTURE.md](ARCHITECTURE.md)。
+
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Code style: ruff](https://img.shields.io/badge/code%20style-ruff-261230)](https://github.com/astral-sh/ruff)

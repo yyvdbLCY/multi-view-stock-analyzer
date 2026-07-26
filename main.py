@@ -157,7 +157,8 @@ def _split_message(text: str, max_len: int = 3500) -> list[str]:
 async def run_pipeline_for_video(url: str) -> dict:
     """Runs: fetch -> extract -> save. Returns summary dict.
 
-    This function is CPU/IO-bound; should be called via asyncio.to_thread.
+    This function is CPU/IO-bound; call it via loop.run_in_executor from
+    an async handler so it doesn't block the Vercel event loop.
     """
     video_id = extract_video_id(url)
     if not video_id:
@@ -196,7 +197,7 @@ async def run_pipeline_for_video(url: str) -> dict:
     }
 
 
-async def run_synthesis_for_tickers(tickers: list[str], run_id: str) -> list[dict]:
+def run_synthesis_for_tickers(tickers: list[str], run_id: str) -> list[dict]:
     """Aggregate + synthesize for given tickers. Returns list of reports."""
     reports = []
     for ticker in tickers:
@@ -266,8 +267,10 @@ async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     await update.message.reply_text(f"🔍 重新評測 {ticker}...")
 
     try:
-        reports = await asyncio.to_thread(
-            lambda: asyncio.run(run_synthesis_for_tickers([ticker], run_id))
+        loop = asyncio.get_running_loop()
+        reports = await asyncio.wait_for(
+            loop.run_in_executor(None, run_synthesis_for_tickers, [ticker], run_id),
+            timeout=50.0,
         )
     except Exception as e:
         logger.exception("cmd_report failed")
@@ -299,10 +302,17 @@ async def cmd_digest(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
                 return []
             reports = synthesize_all(bundles)
             for r in reports:
-                storage.save_report(r.get("ticker", "?"), run_id, r)
+                try:
+                    storage.save_report(r.get("ticker", "?"), run_id, r)
+                except Exception as e:
+                    logger.warning(f"storage.save_report failed: {e}")
             return reports
 
-        reports = await asyncio.to_thread(_do)
+        loop = asyncio.get_running_loop()
+        reports = await asyncio.wait_for(
+            loop.run_in_executor(None, _do),
+            timeout=50.0,
+        )
     except Exception as e:
         logger.exception("cmd_digest failed")
         await update.message.reply_text(f"❌ 失敗: {e}")
@@ -360,13 +370,20 @@ async def handle_youtube_url(update: Update, _: ContextTypes.DEFAULT_TYPE) -> No
         parse_mode=ParseMode.MARKDOWN,
     )
 
-    # Step 1: fetch + extract
+    # Step 1: fetch + extract (synchronous, run in thread pool to not block event loop)
+    loop = asyncio.get_running_loop()
     try:
-        result = await asyncio.to_thread(lambda: asyncio.run(run_pipeline_for_video(url)))
+        result = await asyncio.wait_for(
+            loop.run_in_executor(None, run_pipeline_for_video, url),
+            timeout=50.0,  # Vercel Hobby has 10s default; we'll rely on this
+        )
     except Exception as e:
         logger.exception("pipeline failed")
         tb = traceback.format_exc()[-800:]
-        await status_msg.edit_text(f"❌ 處理失敗:\n`{e}`\n\n```\n{tb}\n```", parse_mode=ParseMode.MARKDOWN)
+        try:
+            await status_msg.edit_text(f"❌ 處理失敗:\n`{e}`\n\n```\n{tb}\n```", parse_mode=ParseMode.MARKDOWN)
+        except Exception:
+            await update.message.reply_text(f"❌ 處理失敗: {e}")
         return
 
     if not result.get("ok"):
@@ -391,13 +408,18 @@ async def handle_youtube_url(update: Update, _: ContextTypes.DEFAULT_TYPE) -> No
     )
 
     # Step 2 + 3: aggregate + synthesize for each ticker
+    loop = asyncio.get_running_loop()
     try:
-        reports = await asyncio.to_thread(
-            lambda: asyncio.run(run_synthesis_for_tickers(tickers, run_id))
+        reports = await asyncio.wait_for(
+            loop.run_in_executor(None, run_synthesis_for_tickers, tickers, run_id),
+            timeout=50.0,
         )
     except Exception as e:
         logger.exception("synthesis failed")
-        await status_msg.edit_text(f"❌ 評測失敗: {e}")
+        try:
+            await status_msg.edit_text(f"❌ 評測失敗: {e}")
+        except Exception:
+            await update.message.reply_text(f"❌ 評測失敗: {e}")
         return
 
     # Step 3 done: send reports

@@ -69,7 +69,12 @@ if missing:
     # Don't crash here — let the health endpoint show the error. Vercel will
     # log it and the user can fix env in the dashboard.
 
-config.settings.ensure_dirs()
+# Try to create local dirs (db/, reports/, logs/). On Vercel's read-only
+# filesystem this will silently no-op — the bot is stateless there anyway.
+try:
+    config.settings.ensure_dirs()
+except (OSError, PermissionError) as e:
+    logger.warning(f"ensure_dirs skipped (read-only FS): {e}")
 
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "").strip()
 

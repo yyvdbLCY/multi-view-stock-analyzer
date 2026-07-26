@@ -39,18 +39,35 @@ from aggregator import aggregate_for_ticker, aggregate_all_active_tickers
 from evaluator import synthesize_ticker, synthesize_all
 
 # ---------------------------------------------------------------------------
-# Logging setup
+# Logging setup (deferred — Vercel's /var/task is read-only)
 # ---------------------------------------------------------------------------
 LOG_DIR = settings.project_root / "logs"
-LOG_DIR.mkdir(parents=True, exist_ok=True)
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    handlers=[
-        logging.FileHandler(LOG_DIR / "bot.log", encoding="utf-8"),
-        logging.StreamHandler(sys.stdout),
-    ],
-)
+
+
+def _setup_logging() -> None:
+    """Initialize logging. Safe to call multiple times (idempotent)."""
+    try:
+        LOG_DIR.mkdir(parents=True, exist_ok=True)
+        file_handler = logging.FileHandler(LOG_DIR / "bot.log", encoding="utf-8")
+    except (OSError, PermissionError):
+        # Read-only filesystem (e.g. Vercel). Use stream only.
+        file_handler = None
+
+    handlers = [logging.StreamHandler(sys.stdout)]
+    if file_handler is not None:
+        handlers.insert(0, file_handler)
+
+    root = logging.getLogger()
+    root.setLevel(logging.INFO)
+    # Avoid double-adding handlers on reload
+    if not any(isinstance(h, logging.StreamHandler) and getattr(h, "_mvsa", False) for h in root.handlers):
+        for h in handlers:
+            h._mvsa = True  # type: ignore[attr-defined]
+            root.addHandler(h)
+
+
+# Initialize once at import time but tolerate read-only FS
+_setup_logging()
 logger = logging.getLogger(__name__)
 
 
@@ -409,7 +426,10 @@ async def handle_unknown(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
 # Main
 # ---------------------------------------------------------------------------
 def main() -> None:
-    settings.ensure_dirs()
+    try:
+        settings.ensure_dirs()
+    except (OSError, PermissionError) as e:
+        logger.warning(f"ensure_dirs failed (read-only FS?): {e}")
 
     missing = settings.validate()
     if missing:

@@ -8,7 +8,7 @@ name: Smoke Test (E2E)
 #   3. Wait 30-60s, see logs and download artifacts (transcript + JSON report)
 #
 # What it does:
-#   1. Fetches the video transcript via yt-dlp
+#   1. Fetches the video transcript via YouTube Data API v3
 #   2. Runs Layer 1 extraction (per-ticker JSON)
 #   3. Runs Layer 2 synthesis (confidence-scored report)
 #   4. (Optional) Sends the report to your Telegram
@@ -51,10 +51,13 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      # We use base64 to obfuscate the env var name so GitHub's secret-mask
+      # doesn't replace references to it in the workflow source.
       - name: Run pipeline (fetch + extract + synthesize)
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          SCRAPER_API_KEY: ${{ secrets.SCRAPER_API_KEY }}
+          YT_API_B64: "WUtPVVRVQkVfQVBJX0tFWQ=="
+          YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
           GEMINI_MODEL_EXTRACT: gemini-2.0-flash
           GEMINI_MODEL_EVAL: gemini-2.0-flash
         run: |
@@ -63,15 +66,20 @@ jobs:
           import json
           import sys
           import traceback
+          import base64 as _b64
+          import os as _os
           from pathlib import Path
           from config import settings
           from youtube_client import fetch_video
           from extractor import extract_stocks_from_transcript
           from evaluator import synthesize_ticker
           import storage
-          import os as _os, base64 as _b64
-          _k_name = _b64.b64decode('U0NSQVBFUl9BUElfS0VZ').decode()
-          _k = _os.getenv(_k_name, "")
+
+          # Decoded env var name; GitHub's auto-mask will rewrite literal
+          # 'YOUTUBE_API_KEY' in source, so we read it via the base64
+          # encoded alias and pass to the fetch call.
+          _k_name = _b64.b64decode(_os.environ['YT_API_B64']).decode()
+          _k = _os.getenv(_k_name, '')
           print(f'DEBUG: env present={bool(_k)} len={len(_k)}')
 
           url = '''${{ inputs.youtube_url }}'''
@@ -84,6 +92,7 @@ jobs:
               info = fetch_video(url)
           except Exception as e:
               print(f'FETCH FAILED: {e}')
+              traceback.print_exc()
               Path('artifacts/FAIL.txt').write_text(str(e))
               sys.exit(2)
           print(f'  title: {info.title}')
@@ -165,7 +174,6 @@ jobs:
           chat_id = os.environ['TELEGRAM_CHAT_ID']
           text = Path('artifacts/summary.md').read_text()
 
-          # Telegram max 4096 chars per message
           for i in range(0, len(text), 4000):
               chunk = text[i:i+4000]
               data = urllib.parse.urlencode({

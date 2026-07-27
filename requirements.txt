@@ -8,11 +8,8 @@ uvicorn[standard]>=0.27.0
 # httpx is a fastapi dep but pin to avoid surprises
 httpx>=0.27.0
 pyyaml>=6.0
-# yt-dlp still kept as a last-resort fallback if YouTube Data API fails.
-# Captions normally require OAuth, so the YouTube API path is the
-# primary; this is just an escape hatch for power users.
-yt-dlp>=2024.10.7
-youtube-transcript-api>=0.6.0
 
-# Optional: only needed if ENABLE_WHISPER_FALLBACK=true
+# Optional: only needed if ENABLE_WHISPER_FALLBACK=true (audio transcription)
+# Requires ffmpeg + ~150MB openai-whisper package. Not used by the main
+# ScraperAPI path. Uncomment locally if you want audio fallback.
 # openai-whisper>=20231117

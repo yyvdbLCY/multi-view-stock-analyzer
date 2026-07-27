@@ -54,6 +54,7 @@ jobs:
       - name: Run pipeline (fetch + extract + synthesize)
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          SCRAPER_API_KEY: ${{ secrets.SCRAPER_API_KEY }}
           GEMINI_MODEL_EXTRACT: gemini-2.0-flash
           GEMINI_MODEL_EVAL: gemini-2.0-flash
         run: |
@@ -68,6 +69,8 @@ jobs:
           from extractor import extract_stocks_from_transcript
           from evaluator import synthesize_ticker
           import storage
+          import os as _os
+          print(f'DEBUG: SCRAPER_API_KEY env present={bool(_os.getenv("SCRAPER_API_KEY"))} len={len(_os.getenv("SCRAPER_API_KEY", ""))}')
 
           url = '''${{ inputs.youtube_url }}'''
           print(f'==Pipeline target: {url}==')

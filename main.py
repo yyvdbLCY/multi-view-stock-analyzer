@@ -13,13 +13,11 @@ Auth: only user IDs in TELEGRAM_ALLOWED_USER_IDS can use the bot.
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import re
 import sys
 import traceback
 import uuid
-from pathlib import Path
 
 from telegram import Update
 from telegram.constants import ParseMode

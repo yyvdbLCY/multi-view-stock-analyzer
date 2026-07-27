@@ -119,7 +119,12 @@ def _fetch_transcript_scraperapi(video_id: str) -> str | None:
     request the caption URL (also through ScraperAPI). Parses both JSON3
     and XML caption formats.
     """
-    if not os.getenv("SCRAPER_API_KEY"):
+    key = os.getenv("SCRAPER_API_KEY", "").strip()
+    logger.info(
+        f"_fetch_transcript_scraperapi({video_id}): "
+        f"key_present={bool(key)}, key_len={len(key)}"
+    )
+    if not key:
         return None
 
     # 1) Load watch page to find captionTracks

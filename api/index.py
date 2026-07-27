@@ -69,6 +69,15 @@ if missing:
     # Don't crash here — let the health endpoint show the error. Vercel will
     # log it and the user can fix env in the dashboard.
 
+# Debug: confirm SCRAPER_API_KEY is actually visible at import time
+import os as _os
+_scraper_key = _os.getenv("SCRAPER_API_KEY", "")
+logger.info(
+    f"Boot: SCRAPER_API_KEY present={bool(_scraper_key)} "
+    f"len={len(_scraper_key)} "
+    f"first4={_scraper_key[:4]!r}"
+)
+
 # Try to create local dirs (db/, reports/, logs/). On Vercel's read-only
 # filesystem this will silently no-op — the bot is stateless there anyway.
 try:

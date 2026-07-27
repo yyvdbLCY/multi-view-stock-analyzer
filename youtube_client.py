@@ -17,6 +17,7 @@ import json
 import logging
 import os
 import re
+import tempfile
 import urllib.request
 import urllib.parse
 from dataclasses import dataclass

@@ -1,12 +1,13 @@
 """YouTube caption / transcript fetcher.
 
 Strategy (ordered, fall back on failure):
-  1. youtube-transcript-api   (lightweight, just hits the captions endpoint;
-                                bypasses yt-dlp's browser-impersonation
-                                which trips YouTube's anti-bot on datacenter IPs
-                                like Vercel's).
-  2. yt-dlp                    (legacy fallback if transcripts endpoint blocked).
-  3. (Optional) Whisper        (download audio + transcribe, requires ffmpeg).
+  1. ScraperAPI + YouTube oEmbed + timedtext   (preferred — bypasses YouTube's
+                                                 datacenter IP block by routing
+                                                 through ScraperAPI's residential pool)
+  2. youtube-transcript-api                    (direct, may fail on Vercel IP)
+  3. yt-dlp                                    (legacy fallback, needs cookies
+                                                 on datacenter IPs)
+  4. (Optional) Whisper                        (download audio + transcribe)
 
 Returns plain text transcript + metadata.
 """
@@ -14,11 +15,13 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
-import subprocess
-import tempfile
+import urllib.request
+import urllib.parse
 from dataclasses import dataclass
 from pathlib import Path
+from xml.etree import ElementTree as ET
 
 from config import settings
 
@@ -33,7 +36,7 @@ class VideoInfo:
     channel: str
     published: str  # ISO date string
     transcript: str
-    caption_source: str  # 'transcript-api' | 'yt-dlp' | 'whisper' | 'failed'
+    caption_source: str  # 'scraperapi' | 'transcript-api' | 'yt-dlp' | 'whisper' | 'failed'
 
 
 _YT_URL_RE = re.compile(
@@ -47,24 +50,185 @@ def extract_video_id(url: str) -> str | None:
 
 
 # ---------------------------------------------------------------------------
-# Strategy 1: youtube-transcript-api (preferred for cloud/datacenter IPs)
+# Strategy 1: ScraperAPI proxy (preferred for cloud IPs)
+# ---------------------------------------------------------------------------
+def _scraperapi_url(target_url: str) -> str | None:
+    """Wrap a target URL through ScraperAPI, or return None if not configured."""
+    key = os.getenv("SCRAPER_API_KEY", "").strip()
+    if not key:
+        return None
+    # ScraperAPI GET API: prepend their endpoint with the target as a query param
+    return f"https://api.scraperapi.com/?api_key={key}&url={urllib.parse.quote(target_url, safe='')}"
+
+
+def _http_get(url: str, timeout: int = 30) -> str | None:
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as r:
+            return r.read().decode("utf-8", errors="ignore")
+    except Exception as e:
+        logger.info(f"http_get failed for {url[:80]}: {e}")
+        return None
+
+
+def _fetch_metadata_scraperapi(video_id: str) -> tuple[str, str, str]:
+    """Fetch video metadata via ScraperAPI -> YouTube oEmbed.
+
+    Returns (title, channel, published). published will be '' since oEmbed
+    doesn't include upload date; we fall back to yt-dlp if we need it.
+    """
+    target = f"https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v={video_id}&format=json"
+    proxy = _scraperapi_url(target)
+    if not proxy:
+        return _fetch_metadata_oembed_direct(video_id)
+    body = _http_get(proxy)
+    if not body:
+        return _fetch_metadata_oembed_direct(video_id)
+    try:
+        data = json.loads(body)
+        return (
+            data.get("title", ""),
+            data.get("author_name", ""),
+            "",  # oEmbed doesn't have upload date
+        )
+    except Exception as e:
+        logger.info(f"scraperapi oembed parse failed: {e}")
+        return _fetch_metadata_oembed_direct(video_id)
+
+
+def _fetch_metadata_oembed_direct(video_id: str) -> tuple[str, str, str]:
+    """Direct (no-proxy) oEmbed fallback. Works from cloud IPs."""
+    target = f"https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v={video_id}&format=json"
+    body = _http_get(target, timeout=10)
+    if body:
+        try:
+            data = json.loads(body)
+            return (
+                data.get("title", ""),
+                data.get("author_name", ""),
+                "",
+            )
+        except Exception:
+            pass
+    return ("", "", "")
+
+
+def _fetch_transcript_scraperapi(video_id: str) -> str | None:
+    """Fetch transcript via ScraperAPI.
+
+    Approach: load the watch page, parse out the captionTracks JSON, then
+    request the caption URL (also through ScraperAPI). Parses both JSON3
+    and XML caption formats.
+    """
+    if not os.getenv("SCRAPER_API_KEY"):
+        return None
+
+    # 1) Load watch page to find captionTracks
+    watch_target = f"https://www.youtube.com/watch?v={video_id}"
+    watch_proxy = _scraperapi_url(watch_target)
+    body = _http_get(watch_proxy, timeout=45)
+    if not body:
+        return None
+
+    # Find captionTracks in the page JSON
+    tracks = _extract_caption_tracks(body)
+    if not tracks:
+        logger.info(f"scraperapi: no captionTracks found for {video_id}")
+        return None
+
+    # Prefer an English track
+    track = next(
+        (t for t in tracks if (t.get("languageCode") or "").startswith("en")),
+        tracks[0],
+    )
+    caption_url = track.get("baseUrl") or ""
+    if not caption_url:
+        return None
+
+    # 2) Fetch the actual caption file (JSON3 if available)
+    # Append fmt=json3 for easier parsing if not already in URL
+    if "fmt=" not in caption_url:
+        sep = "&" if "?" in caption_url else "?"
+        caption_url_json = caption_url + sep + "fmt=json3"
+    else:
+        caption_url_json = caption_url
+
+    cap_proxy = _scraperapi_url(caption_url_json)
+    body = _http_get(cap_proxy, timeout=30)
+    if not body:
+        # Try the original (XML) URL
+        cap_proxy_xml = _scraperapi_url(caption_url)
+        body = _http_get(cap_proxy_xml, timeout=30)
+    if not body:
+        return None
+
+    # 3) Parse as JSON3 or XML
+    return _parse_caption_body(body)
+
+
+def _extract_caption_tracks(html: str) -> list[dict]:
+    """Pull captionTracks JSON out of a YouTube watch page HTML."""
+    # captionTracks appears as "captionTracks":[{"baseUrl":"...","languageCode":"en",...},...]
+    # The array is sometimes quite long; use a non-greedy match with a cap.
+    m = re.search(r'"captionTracks"\s*:\s*(\[(?:[^\[\]]|\[[^\]]*\]){0,5000}\])', html)
+    if not m:
+        return []
+    raw = m.group(1)
+    try:
+        tracks = json.loads(raw)
+        return tracks if isinstance(tracks, list) else []
+    except Exception as e:
+        logger.info(f"captionTracks parse failed: {e}")
+        return []
+
+
+def _parse_caption_body(body: str) -> str | None:
+    """Parse a caption response as JSON3 or XML into plain text."""
+    # Try JSON3 first
+    try:
+        data = json.loads(body)
+        if isinstance(data, dict) and "events" in data:
+            texts = []
+            for ev in data["events"]:
+                for seg in ev.get("segs", []):
+                    if "utf8" in seg and seg["utf8"]:
+                        texts.append(seg["utf8"].replace("\n", " "))
+            if texts:
+                return " ".join(texts)
+        if isinstance(data, list):
+            # Older JSON3 format: list of {utf8, ...}
+            texts = [s.get("utf8", s.get("text", "")).replace("\n", " ") for s in data if isinstance(s, dict)]
+            if texts:
+                return " ".join(texts)
+    except Exception:
+        pass
+
+    # Try XML
+    try:
+        root = ET.fromstring(body)
+        texts = []
+        for t in root.iter("text"):
+            if t.text:
+                texts.append(t.text.replace("\n", " "))
+        if texts:
+            return " ".join(texts)
+    except Exception as e:
+        logger.info(f"caption XML parse failed: {e}")
+
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Strategy 2: youtube-transcript-api (direct, may fail on datacenter IPs)
 # ---------------------------------------------------------------------------
 def _fetch_via_transcript_api(video_id: str) -> str | None:
-    """Fetch the transcript using the lightweight youtube-transcript-api.
-
-    Bypasses yt-dlp's anti-bot fingerprinting. Returns plain text or None.
-    """
     try:
         from youtube_transcript_api import YouTubeTranscriptApi
     except ImportError:
-        logger.info("youtube-transcript-api not installed, skipping.")
         return None
-
     try:
         api = YouTubeTranscriptApi()
-        # Newer API (>=0.6): api.fetch(video_id) returns FetchedTranscript
         fetched = api.fetch(video_id)
-        snippets = list(fetched)  # FetchedTranscriptSnippet objects
+        snippets = list(fetched)
         if not snippets:
             return None
         return " ".join(s.text.replace("\n", " ") for s in snippets)
@@ -74,10 +238,9 @@ def _fetch_via_transcript_api(video_id: str) -> str | None:
 
 
 # ---------------------------------------------------------------------------
-# Strategy 2: yt-dlp (legacy fallback — may fail on datacenter IPs)
+# Strategy 3: yt-dlp (legacy, may need cookies)
 # ---------------------------------------------------------------------------
 def _clean_vtt(raw: str) -> str:
-    """Strip VTT/SRT timestamps and tags, return plain text joined by spaces."""
     lines = []
     seen = set()
     for line in raw.splitlines():
@@ -120,21 +283,18 @@ def _fetch_via_ytdlp(url: str) -> str | None:
         manual_url = _pick(subs)
         auto_url = _pick(auto_subs) if not manual_url else None
         chosen_url = manual_url or auto_url
-        source = "manual" if manual_url else ("auto" if auto_url else None)
         if not chosen_url:
             return None
-
-        import urllib.request
         with urllib.request.urlopen(chosen_url, timeout=30) as r:
             raw = r.read().decode("utf-8", errors="ignore")
-        return _clean_vtt(raw), source
+        return _clean_vtt(raw)
     except Exception as e:
         logger.info(f"yt-dlp fetch failed: {e}")
         return None
 
 
 # ---------------------------------------------------------------------------
-# Strategy 3: Whisper fallback (optional)
+# Strategy 4: Whisper fallback (optional)
 # ---------------------------------------------------------------------------
 def _whisper_fallback(url: str, video_id: str) -> str | None:
     if not settings.enable_whisper_fallback:
@@ -142,7 +302,6 @@ def _whisper_fallback(url: str, video_id: str) -> str | None:
     try:
         import whisper  # type: ignore
     except ImportError:
-        logger.error("Whisper fallback enabled but `whisper` package not installed.")
         return None
 
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -173,23 +332,37 @@ def fetch_video(url: str) -> VideoInfo:
     if not video_id:
         raise ValueError(f"Cannot parse YouTube video ID from URL: {url}")
 
-    # Metadata: try yt-dlp first (it gives us title/channel/date reliably)
-    # If yt-dlp fails (e.g. anti-bot), try the YouTube oEmbed endpoint.
-    title, channel, published = _fetch_metadata(url, video_id)
+    # 1) Metadata: try ScraperAPI -> oEmbed -> yt-dlp
+    title, channel, published = _fetch_metadata_scraperapi(video_id)
+    if not title:
+        # Fallback: yt-dlp
+        try:
+            from yt_dlp import YoutubeDL
+            with YoutubeDL({"quiet": True, "skip_download": True}) as ydl:
+                info = ydl.extract_info(url, download=False)
+            title = info.get("title", "") or ""
+            channel = info.get("uploader") or info.get("channel") or ""
+            upload_date = info.get("upload_date") or ""
+            if len(upload_date) == 8:
+                published = f"{upload_date[:4]}-{upload_date[4:6]}-{upload_date[6:]}"
+        except Exception as e:
+            logger.info(f"yt-dlp metadata fallback failed: {e}")
+
     if not title:
         raise RuntimeError(
             f"Could not fetch metadata for video {video_id}. "
-            f"YouTube may be blocking this datacenter IP."
+            f"YouTube may be blocking this datacenter IP and no proxy is configured."
         )
 
-    # Transcript: try strategies in order
-    transcript = _fetch_via_transcript_api(video_id)
-    source = "transcript-api"
+    # 2) Transcript: try strategies in priority order
+    transcript = _fetch_transcript_scraperapi(video_id)
+    source = "scraperapi"
     if not transcript:
-        result = _fetch_via_ytdlp(url)
-        if result:
-            transcript, yt_source = result
-            source = f"yt-dlp:{yt_source}"
+        transcript = _fetch_via_transcript_api(video_id)
+        source = "transcript-api"
+    if not transcript:
+        transcript = _fetch_via_ytdlp(url)
+        source = "yt-dlp"
     if not transcript:
         transcript = _whisper_fallback(url, video_id)
         source = "whisper" if transcript else "failed"
@@ -209,40 +382,6 @@ def fetch_video(url: str) -> VideoInfo:
         transcript=transcript,
         caption_source=source,
     )
-
-
-def _fetch_metadata(url: str, video_id: str) -> tuple[str, str, str]:
-    """Try yt-dlp first, then oEmbed as fallback. Returns (title, channel, published)."""
-    # Try yt-dlp
-    try:
-        from yt_dlp import YoutubeDL
-        with YoutubeDL({"quiet": True, "skip_download": True}) as ydl:
-            info = ydl.extract_info(url, download=False)
-        title = info.get("title") or ""
-        channel = info.get("uploader") or info.get("channel") or ""
-        upload_date = info.get("upload_date") or ""
-        published = ""
-        if len(upload_date) == 8:
-            published = f"{upload_date[:4]}-{upload_date[4:6]}-{upload_date[6:]}"
-        if title:
-            return title, channel, published
-    except Exception as e:
-        logger.info(f"yt-dlp metadata fetch failed: {e}")
-
-    # Fallback: YouTube oEmbed (no anti-bot)
-    try:
-        import urllib.request
-        oembed_url = f"https://www.youtube.com/oembed?url={url}&format=json"
-        with urllib.request.urlopen(oembed_url, timeout=10) as r:
-            data = json.loads(r.read().decode("utf-8"))
-        return (
-            data.get("title", "(unknown title)"),
-            data.get("author_name", "(unknown channel)"),
-            "",  # oEmbed doesn't return upload date
-        )
-    except Exception as e:
-        logger.info(f"oEmbed fallback failed: {e}")
-        return ("", "", "")
 
 
 if __name__ == "__main__":

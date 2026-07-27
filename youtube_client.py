@@ -1,21 +1,14 @@
-"""YouTube Data API v3 client.
+"""YouTube client via ScraperAPI proxy.
 
-Uses Google's official YouTube Data API v3 (no datacenter IP block, no
-third-party proxies). Requires YOUTUBE_API_KEY in env.
+Uses ScraperAPI to bypass YouTube's datacenter IP block.
+Requires SCRAPER_API_KEY in env.
 
-Two API calls per video:
-  1. videos.list  -> metadata (title, channel, publish date)
-  2. captions.list -> list available caption tracks
-  3. captions.download -> fetch the actual caption content (JSON3 format)
+Strategy (single path, fail-fast):
+  1. oEmbed via ScraperAPI -> title, channel
+  2. Watch page via ScraperAPI -> find captionTracks
+  3. caption track baseUrl + fmt=json3 via ScraperAPI -> transcript text
 
-Note on captions access:
-  - captions.list and captions.download normally require OAuth (the video
-    owner must authorize the request). For *public* videos where the owner
-    has enabled downloadable captions, an API key may work, but this is
-    not guaranteed. If we hit 403, we surface a clear error so the user
-    knows it's an API permission issue, not a code bug.
-
-Returns plain text transcript + metadata, or raises on failure.
+If any step fails, raises immediately. No silent fallback.
 """
 from __future__ import annotations
 
@@ -23,6 +16,7 @@ import json
 import logging
 import os
 import re
+import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
@@ -36,9 +30,9 @@ class VideoInfo:
     url: str
     title: str
     channel: str
-    published: str  # ISO date string (YYYY-MM-DD)
+    published: str  # YYYY-MM-DD (may be empty if oEmbed doesn't return it)
     transcript: str
-    caption_source: str  # 'youtube-api' | 'failed'
+    caption_source: str  # 'scraperapi'
 
 
 _YT_URL_RE = re.compile(
@@ -52,132 +46,164 @@ def extract_video_id(url: str) -> str | None:
 
 
 # ---------------------------------------------------------------------------
-# YouTube Data API v3 helpers
+# ScraperAPI helpers
 # ---------------------------------------------------------------------------
 def _api_key() -> str:
-    key = os.getenv("YOUTUBE_API_KEY", "").strip()
+    key = os.getenv("SCRAPER_API_KEY", "").strip()
     if not key:
         raise RuntimeError(
-            "YOUTUBE_API_KEY is not set. Get one at "
-            "https://console.cloud.google.com/apis/credentials"
+            "SCRAPER_API_KEY is not set. Get one at https://www.scraperapi.com/"
         )
     return key
 
 
-def _api_get(endpoint: str, params: dict | None = None, timeout: int = 30) -> dict:
-    """Call a YouTube Data API v3 GET endpoint and return parsed JSON."""
-    params = dict(params or {})
-    params["key"] = _api_key()
-    url = f"https://www.googleapis.com/youtube/v3/{endpoint}?{urllib.parse.urlencode(params)}"
+def _scraperapi_get(target_url: str, timeout: int = 60) -> str:
+    """Fetch `target_url` through ScraperAPI and return the raw body string."""
+    proxy = (
+        f"https://api.scraperapi.com/?api_key={_api_key()}"
+        f"&url={urllib.parse.quote(target_url, safe='')}"
+    )
+    logger.info(f"scraperapi: GET {target_url[:80]}...")
     try:
-        with urllib.request.urlopen(url, timeout=timeout) as r:
-            return json.loads(r.read().decode("utf-8"))
+        with urllib.request.urlopen(proxy, timeout=timeout) as r:
+            body = r.read().decode("utf-8", errors="ignore")
+            logger.info(f"scraperapi: status={r.status}, len={len(body)}")
+            return body
     except urllib.error.HTTPError as e:
-        body = e.read().decode("utf-8", errors="ignore")
-        # Try to extract a friendly error message
-        try:
-            err = json.loads(body)
-            msg = err.get("error", {}).get("message", body[:200])
-        except Exception:
-            msg = body[:200]
+        err_body = e.read().decode("utf-8", errors="ignore")[:200]
         raise RuntimeError(
-            f"YouTube API {e.code} on {endpoint}: {msg}"
+            f"ScraperAPI HTTP {e.code} on {target_url[:80]}: {err_body}"
+        ) from e
+    except Exception as e:
+        raise RuntimeError(
+            f"ScraperAPI request failed for {target_url[:80]}: "
+            f"{type(e).__name__}: {e}"
         ) from e
 
 
+# ---------------------------------------------------------------------------
+# Metadata
+# ---------------------------------------------------------------------------
 def _fetch_metadata(video_id: str) -> tuple[str, str, str]:
-    """videos.list -> (title, channel, published YYYY-MM-DD)."""
-    data = _api_get("videos", {"part": "snippet", "id": video_id})
-    items = data.get("items", [])
-    if not items:
-        raise RuntimeError(f"YouTube API returned no items for video {video_id}")
-    snip = items[0].get("snippet", {})
-    title = snip.get("title", "")
-    channel = snip.get("channelTitle", "")
-    published_at = snip.get("publishedAt", "")
-    published = published_at[:10] if published_at else ""
-    return title, channel, published
-
-
-def _fetch_caption_id(video_id: str) -> tuple[str, str]:
-    """captions.list -> (caption_id, language_code).
-
-    Returns the id of the first available English caption track (or the
-    first available track if no English one exists).
-
-    Raises a clear error if 403 (most common case: this endpoint requires
-    OAuth, not just an API key).
-    """
-    data = _api_get("captions", {"part": "snippet", "videoId": video_id})
-    items = data.get("items", [])
-    if not items:
-        raise RuntimeError(
-            f"YouTube API reports no captions for video {video_id}. "
-            f"(Some videos disable captions; some require OAuth.)"
-        )
-    # Prefer English
-    for item in items:
-        lang = item.get("snippet", {}).get("language", "")
-        if lang.lower().startswith("en"):
-            return item["id"], lang
-    # Fall back to the first available
-    first = items[0]
-    return first["id"], first.get("snippet", {}).get("language", "?")
-
-
-def _download_caption(caption_id: str) -> str:
-    """captions.download -> plain text (parse JSON3 events)."""
-    data = _api_get(
-        f"captions/{caption_id}",
-        {"tfmt": "json3"},
-        timeout=45,
+    """oEmbed via ScraperAPI -> (title, author, published)."""
+    target = (
+        f"https://www.youtube.com/oembed?url="
+        f"https://www.youtube.com/watch?v={video_id}&format=json"
     )
-    # JSON3 format: {"events": [{"segs": [{"utf8": "..."}]}]}
+    body = _scraperapi_get(target)
+    try:
+        data = json.loads(body)
+    except json.JSONDecodeError as e:
+        raise RuntimeError(
+            f"oEmbed returned non-JSON ({len(body)} bytes): {body[:200]}"
+        ) from e
+    title = data.get("title", "")
+    author = data.get("author_name", "")
+    return title, author, ""  # oEmbed doesn't expose published date
+
+
+# ---------------------------------------------------------------------------
+# Transcript
+# ---------------------------------------------------------------------------
+def _find_caption_tracks(watch_body: str) -> list[dict]:
+    """Extract the captionTracks JSON array from a YouTube watch page.
+
+    captionTracks is a JSON array embedded in the page. We find its
+    bracket span and parse the slice as JSON.
+    """
+    m = re.search(r'"captionTracks"\s*:\s*(\[)', watch_body)
+    if not m:
+        raise RuntimeError(
+            f"No captionTracks found in watch page (body len={len(watch_body)})"
+        )
+    arr_start = m.end() - 1
+    depth = 0
+    arr_end = arr_start
+    for i in range(arr_start, min(arr_start + 50_000, len(watch_body))):
+        ch = watch_body[i]
+        if ch == "[":
+            depth += 1
+        elif ch == "]":
+            depth -= 1
+            if depth == 0:
+                arr_end = i
+                break
+    if depth != 0:
+        raise RuntimeError("Could not find end of captionTracks array")
+    try:
+        return json.loads(watch_body[arr_start : arr_end + 1])
+    except json.JSONDecodeError as e:
+        raise RuntimeError(f"captionTracks parse failed: {e}") from e
+
+
+def _fetch_transcript(video_id: str) -> str:
+    """Watch page -> captionTracks -> timedtext (JSON3) -> text."""
+    target = f"https://www.youtube.com/watch?v={video_id}"
+    body = _scraperapi_get(target, timeout=60)
+
+    tracks = _find_caption_tracks(body)
+    if not tracks:
+        raise RuntimeError("captionTracks array is empty")
+
+    # Prefer English, else first available
+    chosen = next(
+        (
+            t for t in tracks
+            if (t.get("languageCode") or "").lower().startswith("en")
+        ),
+        tracks[0],
+    )
+    base_url = chosen.get("baseUrl", "")
+    if not base_url:
+        raise RuntimeError("caption track has no baseUrl")
+    lang = chosen.get("languageCode", "?")
+    logger.info(
+        f"scraperapi: chose caption track lang={lang} for {video_id}"
+    )
+
+    # Fetch caption content as JSON3 (structured events)
+    json3_url = base_url + "&fmt=json3"
+    caption_body = _scraperapi_get(json3_url, timeout=60)
+
+    try:
+        events = json.loads(caption_body).get("events", [])
+    except json.JSONDecodeError as e:
+        raise RuntimeError(
+            f"timedtext not JSON3 ({len(caption_body)} bytes): "
+            f"{caption_body[:200]}"
+        ) from e
+
     texts: list[str] = []
-    for ev in data.get("events", []):
+    for ev in events:
         for seg in ev.get("segs", []):
             utf8 = seg.get("utf8")
             if utf8:
                 texts.append(utf8.replace("\n", " "))
-    return " ".join(texts).strip()
+    transcript = " ".join(texts).strip()
+
+    if not transcript:
+        raise RuntimeError("timedtext returned empty transcript")
+    return transcript
 
 
 # ---------------------------------------------------------------------------
-# Main entry point
+# Main entry
 # ---------------------------------------------------------------------------
 def fetch_video(url: str) -> VideoInfo:
-    """Fetch metadata + transcript via YouTube Data API v3.
-
-    Raises RuntimeError on any failure. Callers should catch and report.
-    """
+    """Fetch metadata + transcript via ScraperAPI. Fails fast on any error."""
     video_id = extract_video_id(url) or ""
     if not video_id:
         raise ValueError(f"Cannot parse YouTube video ID from URL: {url}")
 
-    # 1) Metadata (always works with API key)
     title, channel, published = _fetch_metadata(video_id)
     if not title:
-        raise RuntimeError(f"YouTube API returned empty title for video {video_id}")
-    logger.info(f"youtube api: got metadata for {video_id}: '{title[:60]}'")
-
-    # 2) Caption track id (may 403 if not public / requires OAuth)
-    try:
-        caption_id, lang = _fetch_caption_id(video_id)
-        logger.info(f"youtube api: found caption track {caption_id} ({lang}) for {video_id}")
-    except RuntimeError as e:
-        # Re-raise with extra hint about OAuth limitation
         raise RuntimeError(
-            f"{e}\n"
-            f"  Hint: YouTube Data API v3 'captions' endpoints typically "
-            f"require OAuth (video owner authorization), not just an API key. "
-            f"If the video owner has made captions publicly downloadable, an "
-            f"API key will work; otherwise you need OAuth credentials."
-        ) from e
+            f"ScraperAPI oEmbed returned empty title for video {video_id}"
+        )
+    logger.info(f"scraperapi: title='{title[:60]}' channel='{channel}'")
 
-    # 3) Caption content
-    transcript = _download_caption(caption_id)
-    if not transcript:
-        raise RuntimeError(f"Downloaded caption for {caption_id} was empty")
+    transcript = _fetch_transcript(video_id)
+    logger.info(f"scraperapi: transcript len={len(transcript)} for {video_id}")
 
     return VideoInfo(
         video_id=video_id,
@@ -186,7 +212,7 @@ def fetch_video(url: str) -> VideoInfo:
         channel=channel,
         published=published,
         transcript=transcript,
-        caption_source="youtube-api",
+        caption_source="scraperapi",
     )
 
 

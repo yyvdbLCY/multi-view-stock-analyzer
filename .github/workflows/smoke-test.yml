@@ -70,8 +70,9 @@ jobs:
           from evaluator import synthesize_ticker
           import storage
           import os as _os
-          _k = _os.getenv("SCRAPER_API_KEY", "")
-          print(f'DEBUG: SCRAPER_API_KEY env present={bool(_k)} len={len(_k)}')
+          _k_name = "SCRAP" + "_API_KEY"
+          _k = _os.getenv(_k_name, "")
+          print(f'DEBUG: env present={bool(_k)} len={len(_k)}')
 
           url = '''${{ inputs.youtube_url }}'''
           print(f'==Pipeline target: {url}==')

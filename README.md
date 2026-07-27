@@ -188,7 +188,7 @@ multi-view-stock-analyzer/
 ├── main.py              # Telegram Bot 入口
 ├── config.py            # 環境變數載入
 ├── prompts.py           # 兩層 Prompt 模板 (核心)
-├── youtube_client.py    # yt-dlp 字幕抓取 (manual → auto → Whisper)
+├── youtube_client.py    # YouTube Data API v3 (videos.list + captions)
 ├── extractor.py         # Layer 1: Gemini 提取
 ├── aggregator.py        # 跨影片聚合
 ├── evaluator.py         # Layer 2: Gemini 綜合評測

@@ -115,7 +115,7 @@
 ```
 main.py
   ├── config.py         (env loading)
-  ├── youtube_client.py (yt-dlp)
+  ├── youtube_client.py (YouTube Data API v3)
   ├── extractor.py      (Layer 1, Gemini)
   ├── aggregator.py     (聚合邏輯)
   │     ├── storage.py

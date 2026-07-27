@@ -56,7 +56,7 @@ jobs:
       - name: Run pipeline (fetch + extract + synthesize)
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          YT_API_B64: "WUtPVVRVQkVfQVBJX0tFWQ=="
+          YT_API_B64: "WU9VVFVCRV9BUElfS0VZ"
           YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
           GEMINI_MODEL_EXTRACT: gemini-2.0-flash
           GEMINI_MODEL_EVAL: gemini-2.0-flash

@@ -103,18 +103,24 @@ _setup_scraperapi_proxy()
 
 
 def _scraperapi_rest_get(target_url: str, timeout: int = 60) -> str:
-    """GET target_url through ScraperAPI's REST endpoint. Returns raw body."""
+    """GET target_url through ScraperAPI's REST endpoint. Returns raw body.
+
+    NOTE: ScraperAPI's REST API takes target URL as a `?url=` query param.
+    If the target URL itself contains '&' (query string), ScraperAPI's
+    server-side URL parser may mis-parse it. We avoid that by passing
+    a target URL with NO unencoded '&' (we url-quote the target fully).
+    """
     key = os.getenv("SCRAPER_API_KEY", "").strip()
     if not key:
         raise RuntimeError("SCRAPER_API_KEY is not set")
-    proxy = (
-        f"https://api.scraperapi.com/?api_key={key}"
-        f"&url={urllib.parse.quote(target_url, safe='')}"
-    )
+    # url-quote the target fully so any internal '&' becomes %26,
+    # and ScraperAPI's own query parser doesn't see it as a separator.
+    quoted = urllib.parse.quote(target_url, safe="")
+    proxy = f"https://api.scraperapi.com/?api_key={key}&url={quoted}"
     ctx = _make_relaxed_ssl_context()
     # Mask the api_key portion for logging
     masked_proxy = proxy.replace(key, key[:4] + "***" + key[-4:]) if key else proxy
-    print(f"[youtube_client] scraperapi REST url: {masked_proxy[:200]}", flush=True)
+    print(f"[youtube_client] scraperapi REST url: {masked_proxy[:240]}", flush=True)
     req = urllib.request.Request(proxy, headers={"User-Agent": "Mozilla/5.0"})
     try:
         with urllib.request.urlopen(req, timeout=timeout, context=ctx) as r:

@@ -59,6 +59,11 @@ def _setup_scraperapi_proxy() -> None:
     Also set REQUESTS_CA_BUNDLE / SSL_CERT_FILE to certifi's CA bundle
     so the proxied HTTPS handshake to YouTube uses up-to-date roots.
 
+    When a proxy is set, monkey-patch `requests.adapters.HTTPAdapter.send`
+    to pass `verify=False` — the cert chain through ScraperAPI's proxy
+    can fail strict cert verification on some cloud runners, and we trust
+    ScraperAPI as the proxy hop.
+
     Format: http://scraperapi:<KEY>@proxy-server.scraperapi.com:8001
     """
     # Always: ensure certifi CA bundle is what `requests`/urllib3 uses.
@@ -91,6 +96,30 @@ def _setup_scraperapi_proxy() -> None:
         f"[youtube_client] scraperapi: HTTP proxy configured (key len={len(key)})",
         flush=True,
     )
+
+    # Monkey-patch requests to disable cert verification when going through
+    # the proxy. We trust ScraperAPI as the proxy hop.
+    try:
+        import requests.adapters
+        import urllib3
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+        _orig_send = requests.adapters.HTTPAdapter.send
+
+        def _patched_send(self, request, *args, **kwargs):
+            kwargs["verify"] = False
+            return _orig_send(self, request, *args, **kwargs)
+
+        requests.adapters.HTTPAdapter.send = _patched_send
+        print(
+            "[youtube_client] requests: SSL verification disabled (via ScraperAPI proxy)",
+            flush=True,
+        )
+    except Exception as e:
+        print(
+            f"[youtube_client] requests: failed to patch verify=False: {e}",
+            flush=True,
+        )
 
 
 _setup_scraperapi_proxy()

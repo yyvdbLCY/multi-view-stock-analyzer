@@ -8,8 +8,9 @@ uvicorn[standard]>=0.27.0
 # httpx is a fastapi dep but pin to avoid surprises
 httpx>=0.27.0
 pyyaml>=6.0
+# YouTube transcript fetcher (no API key, no OAuth)
+youtube-transcript-api>=0.6.2
 
 # Optional: only needed if ENABLE_WHISPER_FALLBACK=true (audio transcription)
-# Requires ffmpeg + ~150MB openai-whisper package. Not used by the main
-# ScraperAPI path. Uncomment locally if you want audio fallback.
+# Requires ffmpeg + ~150MB openai-whisper package. Not used by the main path.
 # openai-whisper>=20231117

@@ -112,6 +112,9 @@ def _scraperapi_rest_get(target_url: str, timeout: int = 60) -> str:
         f"&url={urllib.parse.quote(target_url, safe='')}"
     )
     ctx = _make_relaxed_ssl_context()
+    # Mask the api_key portion for logging
+    masked_proxy = proxy.replace(key, key[:4] + "***" + key[-4:]) if key else proxy
+    print(f"[youtube_client] scraperapi REST url: {masked_proxy[:200]}", flush=True)
     req = urllib.request.Request(proxy, headers={"User-Agent": "Mozilla/5.0"})
     try:
         with urllib.request.urlopen(req, timeout=timeout, context=ctx) as r:

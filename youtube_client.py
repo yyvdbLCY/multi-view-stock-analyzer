@@ -59,6 +59,9 @@ def _setup_scraperapi_proxy() -> None:
       - curl via ScraperAPI CONNECT proxy: HTTP 401 (proxy rejects)
     ScraperAPI's free plan doesn't grant access to the proxy-server
     pool. So we just go direct.
+
+    We DO set certifi CA bundle so the requests/urllib3 SSL handshake
+    uses up-to-date roots.
     """
     try:
         import certifi
@@ -77,10 +80,29 @@ _setup_scraperapi_proxy()
 # Transcript via youtube-transcript-api
 # ---------------------------------------------------------------------------
 def _fetch_transcript(video_id: str) -> tuple[str, str]:
-    """Fetch transcript via youtube-transcript-api. Returns (text, language)."""
+    """Fetch transcript via youtube-transcript-api. Returns (text, language).
+
+    YouTube's bot detection blocks requests with the default
+    `python-requests/...` User-Agent. We wrap a session with a
+    Chrome-style User-Agent and CONSENT cookie (required for EU GDPR
+    compliance per YouTube's policy).
+    """
+    import requests
     from youtube_transcript_api import YouTubeTranscriptApi
 
-    api = YouTubeTranscriptApi()
+    session = requests.Session()
+    session.headers.update({
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/120.0.0.0 Safari/537.36"
+        ),
+        "Accept-Language": "en-US,en;q=0.9,zh-Hant;q=0.8",
+    })
+    # YouTube's EU consent cookie — required since 2024 for all clients
+    session.cookies.set("CONSENT", "YES+cb", domain=".youtube.com")
+
+    api = YouTubeTranscriptApi(http_client=session)
     fetched = api.fetch(
         video_id,
         languages=["en", "en-US", "zh-Hant", "zh-Hans", "zh-TW", "zh"],

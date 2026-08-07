@@ -73,6 +73,41 @@ def _setup_scraperapi_proxy() -> None:
     print("[youtube_client] using direct YouTube access (no proxy)", flush=True)
 
 
+# ---------------------------------------------------------------------------
+# Session cookies — bypass YouTube's BOT_DETECTED on datacenter IPs
+# ---------------------------------------------------------------------------
+def _load_session_cookies() -> list[dict]:
+    """Load YouTube account session cookies from the YOUTUBE_COOKIES env var.
+
+    Format: a base64-encoded JSON list of {name, value, domain} dicts.
+    Returns [] if env var is missing or malformed.
+    """
+    raw = os.getenv("YOUTUBE_COOKIES", "").strip()
+    if not raw:
+        return []
+    # Accept either base64-encoded or plain JSON
+    if raw.startswith("base64:"):
+        import base64
+        try:
+            raw = base64.b64decode(raw[7:]).decode("utf-8")
+        except Exception as e:
+            print(f"[youtube_client] cookies: base64 decode failed: {e}", flush=True)
+            return []
+    try:
+        cookies = json.loads(raw)
+        if not isinstance(cookies, list):
+            print(f"[youtube_client] cookies: expected JSON list, got {type(cookies)}", flush=True)
+            return []
+        print(
+            f"[youtube_client] cookies: loaded {len(cookies)} session cookies",
+            flush=True,
+        )
+        return cookies
+    except json.JSONDecodeError as e:
+        print(f"[youtube_client] cookies: JSON decode failed: {e}", flush=True)
+        return []
+
+
 _setup_scraperapi_proxy()
 
 
@@ -84,8 +119,9 @@ def _fetch_transcript(video_id: str) -> tuple[str, str]:
 
     YouTube's bot detection blocks requests with the default
     `python-requests/...` User-Agent. We wrap a session with a
-    Chrome-style User-Agent and CONSENT cookie (required for EU GDPR
-    compliance per YouTube's policy).
+    Chrome-style User-Agent and load the user's session cookies
+    (if YOUTUBE_COOKIES env is set) so the request is treated as
+    a logged-in user, not a datacenter bot.
     """
     import requests
     from youtube_transcript_api import YouTubeTranscriptApi
@@ -99,8 +135,13 @@ def _fetch_transcript(video_id: str) -> tuple[str, str]:
         ),
         "Accept-Language": "en-US,en;q=0.9,zh-Hant;q=0.8",
     })
-    # YouTube's EU consent cookie — required since 2024 for all clients
-    session.cookies.set("CONSENT", "YES+cb", domain=".youtube.com")
+    # Load the user's YouTube session cookies (bypass BOT_DETECTED)
+    for c in _load_session_cookies():
+        name = c.get("name")
+        value = c.get("value")
+        domain = c.get("domain", ".youtube.com")
+        if name and value:
+            session.cookies.set(name, value, domain=domain)
 
     api = YouTubeTranscriptApi(http_client=session)
     fetched = api.fetch(

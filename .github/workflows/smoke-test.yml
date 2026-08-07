@@ -71,9 +71,7 @@ jobs:
       - name: Run pipeline (fetch + extract + synthesize)
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          # Base64 of "SCRAPER_API_KEY" so GitHub secret-mask doesn't replace it
-          SCK_B64: "U0NSQVBFUl9BUElfS0VZ"
-          SCRAPER_API_KEY: ${{ secrets.SCRAPER_API_KEY }}
+          YOUTUBE_COOKIES: ${{ secrets.YOUTUBE_COOKIES }}
           GEMINI_MODEL_EXTRACT: gemini-2.0-flash
           GEMINI_MODEL_EVAL: gemini-2.0-flash
         run: |

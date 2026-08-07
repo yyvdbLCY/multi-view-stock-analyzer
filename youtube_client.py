@@ -117,7 +117,10 @@ def _fetch_metadata_oembed(video_id: str) -> tuple[str, str, str]:
         f"https://www.youtube.com/oembed?url="
         f"https://www.youtube.com/watch?v={video_id}&format=json"
     )
-    if os.getenv("SCRAPER_API_KEY", "").strip():
+    sk = os.getenv("SCRAPER_API_KEY", "").strip()
+    logger.info(f"oembed: SCRAPER_API_KEY present={bool(sk)} len={len(sk)}")
+    if sk:
+        logger.info("oembed: routing through ScraperAPI REST")
         body = _scraperapi_rest_get(target, timeout=30)
         try:
             data = json.loads(body)

@@ -85,6 +85,10 @@ def _load_session_cookies() -> list[dict]:
     Returns [] if env var is missing or malformed.
     """
     raw = os.getenv("YOUTUBE_COOKIES", "").strip()
+    print(
+        f"[youtube_client] cookies: YOUTUBE_COOKIES present={bool(raw)} len={len(raw)}",
+        flush=True,
+    )
     if not raw:
         return []
     # Accept either base64-encoded or plain JSON
@@ -92,6 +96,10 @@ def _load_session_cookies() -> list[dict]:
         import base64
         try:
             raw = base64.b64decode(raw[7:]).decode("utf-8")
+            print(
+                f"[youtube_client] cookies: decoded base64 -> {len(raw)} chars",
+                flush=True,
+            )
         except Exception as e:
             print(f"[youtube_client] cookies: base64 decode failed: {e}", flush=True)
             return []
@@ -106,7 +114,10 @@ def _load_session_cookies() -> list[dict]:
         )
         return cookies
     except json.JSONDecodeError as e:
-        print(f"[youtube_client] cookies: JSON decode failed: {e}", flush=True)
+        print(
+            f"[youtube_client] cookies: JSON decode failed: {e}, first 100 chars of raw: {raw[:100]!r}",
+            flush=True,
+        )
         return []
 
 

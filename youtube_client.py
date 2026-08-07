@@ -113,8 +113,14 @@ def _scraperapi_rest_get(target_url: str, timeout: int = 60) -> str:
     )
     ctx = _make_relaxed_ssl_context()
     req = urllib.request.Request(proxy, headers={"User-Agent": "Mozilla/5.0"})
-    with urllib.request.urlopen(req, timeout=timeout, context=ctx) as r:
-        return r.read().decode("utf-8", errors="ignore")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout, context=ctx) as r:
+            return r.read().decode("utf-8", errors="ignore")
+    except urllib.error.HTTPError as e:
+        err_body = e.read().decode("utf-8", errors="ignore")
+        raise RuntimeError(
+            f"ScraperAPI REST HTTP {e.code} on {target_url[:80]}: {err_body[:300]}"
+        ) from e
 
 
 def _http_get_json(url: str, timeout: int = 30) -> dict:

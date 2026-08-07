@@ -51,6 +51,21 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      # Diagnostic: verify ScraperAPI HTTP proxy actually works for YouTube
+      - name: Diag - curl YouTube via ScraperAPI HTTP proxy
+        run: |
+          echo "==Test 1: direct YouTube (expect datacenter block)=="
+          curl -sk -o /dev/null -w "  HTTP %{http_code} in %{time_total}s\n" \
+            "https://www.youtube.com/watch?v=LCbVikmmBls" --max-time 20 || echo "  (direct failed as expected)"
+          echo
+          echo "==Test 2: YouTube via ScraperAPI HTTP CONNECT proxy (expect 200 if proxy works)=="
+          curl -sk -x "http://scraperapi:$SCRAPER_API_KEY@proxy-server.scraperapi.com:8001" \
+            -o /dev/null -w "  HTTP %{http_code} in %{time_total}s, size_download=%{size_download}\n" \
+            "https://www.youtube.com/watch?v=LCbVikmmBls" --max-time 30 || echo "  (proxy failed)"
+          echo
+          echo "==Test 3: certifi CA bundle present=="
+          python -c "import certifi, os; p = certifi.where(); print(f'  {p} (size {os.path.getsize(p)} bytes)')"
+
       # We use base64 to obfuscate the env var name so GitHub's secret-mask
       # doesn't replace references to it in the workflow source.
       - name: Run pipeline (fetch + extract + synthesize)

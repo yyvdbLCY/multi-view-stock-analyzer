@@ -142,9 +142,15 @@ def _fetch_metadata_oembed(video_id: str) -> tuple[str, str, str]:
     Uses ScraperAPI REST when key is set (avoids cloud SSL issues);
     falls back to direct HTTPS otherwise.
     """
+    # IMPORTANT: oEmbed only takes ?url=... and ?format=... (default json).
+    # We must NOT pass any other query params because ScraperAPI's
+    # api_key=...&url=... wrapper will eat the first '&' inside the
+    # url value (it'll think &format=json is a separate ScraperAPI
+    # query param). So keep target to a single ?url=... param, no
+    # format, no extra params.
     target = (
         f"https://www.youtube.com/oembed?url="
-        f"https://www.youtube.com/watch?v={video_id}&format=json"
+        f"https://www.youtube.com/watch?v={video_id}"
     )
     sk = os.getenv("SCRAPER_API_KEY", "").strip()
     print(f"[youtube_client] oembed: SCRAPER_API_KEY present={bool(sk)} len={len(sk)}", flush=True)

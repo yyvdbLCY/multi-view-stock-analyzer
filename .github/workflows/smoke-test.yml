@@ -80,7 +80,6 @@ jobs:
           import json
           import sys
           import traceback
-          import base64 as _b64
           import os as _os
           from pathlib import Path
           from config import settings
@@ -89,12 +88,9 @@ jobs:
           from evaluator import synthesize_ticker
           import storage
 
-          # Decoded env var name; GitHub's auto-mask will rewrite literal
-          # 'SCRAPER_API_KEY' in source, so we read it via the base64
-          # encoded alias and pass to the fetch call.
-          _k_name = _b64.b64decode(_os.environ['SCK_B64']).decode()
-          _k = _os.getenv(_k_name, '')
-          print(f'DEBUG: env present={bool(_k)} len={len(_k)}')
+          # YOUTUBE_COOKIES presence check (without printing the value)
+          _cookies = _os.getenv('YOUTUBE_COOKIES', '')
+          print(f'DEBUG: YOUTUBE_COOKIES present={bool(_cookies)} len={len(_cookies)}')
 
           url = '''${{ inputs.youtube_url }}'''
           print(f'==Pipeline target: {url}==')

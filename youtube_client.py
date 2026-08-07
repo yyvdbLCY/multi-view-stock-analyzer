@@ -156,12 +156,20 @@ def _fetch_transcript(video_id: str) -> tuple[str, str]:
         "Accept-Language": "en-US,en;q=0.9,zh-Hant;q=0.8",
     })
     # Load the user's YouTube session cookies (bypass BOT_DETECTED)
+    # Filter out short-lived session cookies (__Secure-*PSIDCC/TS) that
+    # expire within minutes/hours. The main __Secure-1PSID/-3PSID are
+    # the long-lived session identifiers (months/years).
     for c in _load_session_cookies():
         name = c.get("name")
         value = c.get("value")
         domain = c.get("domain", ".youtube.com")
-        if name and value:
-            session.cookies.set(name, value, domain=domain)
+        if not name or not value:
+            continue
+        if name.endswith(("PSIDCC", "PSIDTS", "PSIDRTS", "PAPISID")):
+            # short-lived / auxiliary; skip to avoid YouTube 500 from
+            # already-expired or about-to-expire values
+            continue
+        session.cookies.set(name, value, domain=domain)
 
     api = YouTubeTranscriptApi(http_client=session)
     fetched = api.fetch(

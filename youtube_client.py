@@ -81,7 +81,10 @@ def _setup_scraperapi_proxy() -> None:
 def _load_session_cookies() -> list[dict]:
     """Load YouTube account session cookies from the YOUTUBE_COOKIES env var.
 
-    Format: a base64-encoded JSON list of {name, value, domain} dicts.
+    Accepts:
+      - base64-encoded JSON list (our storage format)
+      - plain JSON list
+
     Returns [] if env var is missing or malformed.
     """
     raw = os.getenv("YOUTUBE_COOKIES", "").strip()
@@ -91,22 +94,26 @@ def _load_session_cookies() -> list[dict]:
     )
     if not raw:
         return []
-    # Accept either base64-encoded or plain JSON
+    # Try base64-decode first; if that fails, treat as plain JSON
+    decoded = None
     if raw.startswith("base64:"):
-        import base64
-        try:
-            raw = base64.b64decode(raw[7:]).decode("utf-8")
+        raw = raw[7:]
+    try:
+        decoded = base64.b64decode(raw).decode("utf-8")
+        print(
+            f"[youtube_client] cookies: base64 decoded -> {len(decoded)} chars",
+            flush=True,
+        )
+    except Exception:
+        # Not base64 — try as plain JSON
+        decoded = raw
+    try:
+        cookies = json.loads(decoded)
+        if not isinstance(cookies, list):
             print(
-                f"[youtube_client] cookies: decoded base64 -> {len(raw)} chars",
+                f"[youtube_client] cookies: expected JSON list, got {type(cookies)}",
                 flush=True,
             )
-        except Exception as e:
-            print(f"[youtube_client] cookies: base64 decode failed: {e}", flush=True)
-            return []
-    try:
-        cookies = json.loads(raw)
-        if not isinstance(cookies, list):
-            print(f"[youtube_client] cookies: expected JSON list, got {type(cookies)}", flush=True)
             return []
         print(
             f"[youtube_client] cookies: loaded {len(cookies)} session cookies",
@@ -115,7 +122,7 @@ def _load_session_cookies() -> list[dict]:
         return cookies
     except json.JSONDecodeError as e:
         print(
-            f"[youtube_client] cookies: JSON decode failed: {e}, first 100 chars of raw: {raw[:100]!r}",
+            f"[youtube_client] cookies: JSON decode failed: {e}, first 80 chars: {decoded[:80]!r}",
             flush=True,
         )
         return []

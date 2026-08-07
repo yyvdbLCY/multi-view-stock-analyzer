@@ -53,8 +53,11 @@ def extract_video_id(url: str) -> str | None:
 def _make_ssl_context() -> ssl.SSLContext:
     try:
         import certifi
-        ctx = ssl.create_default_context(cafile=certifi.where())
-    except Exception:
+        cafile = certifi.where()
+        logger.info(f"ssl: using certifi CA bundle at {cafile} (exists={os.path.exists(cafile)})")
+        ctx = ssl.create_default_context(cafile=cafile)
+    except Exception as e:
+        logger.warning(f"ssl: certifi load failed ({e}), falling back to default context")
         ctx = ssl.create_default_context()
     return ctx
 

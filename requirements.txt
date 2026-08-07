@@ -10,6 +10,8 @@ httpx>=0.27.0
 pyyaml>=6.0
 # YouTube transcript fetcher (no API key, no OAuth)
 youtube-transcript-api>=0.6.2
+# CA bundle for SSL on minimal Python installs (Vercel, GitHub Actions)
+certifi>=2024.7.4
 
 # Optional: only needed if ENABLE_WHISPER_FALLBACK=true (audio transcription)
 # Requires ffmpeg + ~150MB openai-whisper package. Not used by the main path.

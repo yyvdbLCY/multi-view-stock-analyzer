@@ -1,25 +1,27 @@
 """YouTube client.
 
-Strategy (in order):
-  1. youtube-transcript-api (routed via ScraperAPI HTTP proxy when key is set)
-     - No API key, no OAuth needed
-     - Pulls the same public caption tracks that the embedded YouTube player
-       uses (manual + auto-generated)
-  2. ScraperAPI REST endpoint for oEmbed metadata (avoids SSL bundle issues
-     on cloud runners like Vercel / GitHub Actions)
+Single path: youtube-transcript-api, optionally routed through
+ScraperAPI's HTTP proxy when SCRAPER_API_KEY is set.
 
-If SCRAPER_API_KEY is empty, falls back to direct YouTube access
-(may fail on datacenter IPs without cookies).
+Why this approach:
+  - youtube-transcript-api handles the YouTube timedtext API dance
+    (signature, baseUrl, etc.) internally — we don't need to scrape
+    watch pages ourselves
+  - ScraperAPI HTTP proxy mode (proxy-server.scraperapi.com:8001) lets
+    python `requests` go through ScraperAPI's network via the
+    HTTPS_PROXY env var. No URL encoding issues, no REST endpoint
+    weirdness
+  - No API key, no OAuth, no cookies needed for this path
+
+We deliberately skip metadata (title/channel) — it would require
+either an extra call or scraping the watch page, both of which add
+complexity. The bot only needs the transcript to do LLM extraction.
 """
 from __future__ import annotations
 
-import json
 import logging
 import os
 import re
-import ssl
-import urllib.parse
-import urllib.request
 from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
@@ -29,9 +31,9 @@ logger = logging.getLogger(__name__)
 class VideoInfo:
     video_id: str
     url: str
-    title: str
-    channel: str
-    published: str
+    title: str  # empty — not fetched (we let the user see the URL)
+    channel: str  # empty
+    published: str  # empty
     transcript: str
     caption_source: str  # 'youtube-transcript-api' | 'failed'
 
@@ -47,45 +49,14 @@ def extract_video_id(url: str) -> str | None:
 
 
 # ---------------------------------------------------------------------------
-# SSL context using certifi (avoids "unable to get local issuer certificate"
-# on minimal Python installs like the ones on Vercel / GitHub Actions runners)
-# ---------------------------------------------------------------------------
-def _make_ssl_context() -> ssl.SSLContext:
-    """Create an SSL context. By default tries certifi's CA bundle, then
-    system default. Caller can opt into relaxed verification with
-    `ctx.check_hostname = False; ctx.verify_mode = ssl.CERT_NONE` if the
-    target (e.g. api.scraperapi.com) has handshake issues on cloud runners.
-    """
-    try:
-        import certifi
-        cafile = certifi.where()
-        logger.info(f"ssl: using certifi CA bundle at {cafile} (exists={os.path.exists(cafile)})")
-        ctx = ssl.create_default_context(cafile=cafile)
-    except Exception as e:
-        logger.warning(f"ssl: certifi load failed ({e}), falling back to default context")
-        ctx = ssl.create_default_context()
-    return ctx
-
-
-def _make_relaxed_ssl_context() -> ssl.SSLContext:
-    """SSL context with verification disabled. Used only for ScraperAPI
-    proxy access, where the cert chain can fail on some cloud runners
-    (Vercel, GitHub Actions) even with certifi's bundle. The ScraperAPI
-    endpoint is itself a trusted proxy, so MITM risk is low.
-    """
-    ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
-    return ctx
-
-
-# ---------------------------------------------------------------------------
-# ScraperAPI: both HTTP proxy mode (for youtube-transcript-api) and
-# REST endpoint mode (for one-off fetches like oEmbed)
+# ScraperAPI HTTP proxy setup
 # ---------------------------------------------------------------------------
 def _setup_scraperapi_proxy() -> None:
-    """Configure youtube-transcript-api to route through ScraperAPI's
-    HTTP proxy (proxy-server.scraperapi.com:8001).
+    """If SCRAPER_API_KEY is set, configure HTTP/HTTPS_PROXY env vars
+    so that python `requests` (used by youtube-transcript-api) routes
+    through ScraperAPI's HTTP CONNECT proxy.
+
+    Format: http://scraperapi:<KEY>@proxy-server.scraperapi.com:8001
     """
     key = os.getenv("SCRAPER_API_KEY", "").strip()
     if not key:
@@ -96,81 +67,13 @@ def _setup_scraperapi_proxy() -> None:
     os.environ["HTTPS_PROXY"] = proxy_url
     os.environ["https_proxy"] = proxy_url
     os.environ["http_proxy"] = proxy_url
-    logger.info(f"scraperapi: HTTP proxy configured (key len={len(key)})")
+    print(
+        f"[youtube_client] scraperapi: HTTP proxy configured (key len={len(key)})",
+        flush=True,
+    )
 
 
 _setup_scraperapi_proxy()
-
-
-def _scraperapi_rest_get(target_url: str, timeout: int = 60) -> str:
-    """GET target_url through ScraperAPI's REST endpoint. Returns raw body.
-
-    NOTE: ScraperAPI's REST API takes target URL as a `?url=` query param.
-    If the target URL itself contains '&' (query string), ScraperAPI's
-    server-side URL parser may mis-parse it. We avoid that by passing
-    a target URL with NO unencoded '&' (we url-quote the target fully).
-    """
-    key = os.getenv("SCRAPER_API_KEY", "").strip()
-    if not key:
-        raise RuntimeError("SCRAPER_API_KEY is not set")
-    # url-quote the target fully so any internal '&' becomes %26,
-    # and ScraperAPI's own query parser doesn't see it as a separator.
-    quoted = urllib.parse.quote(target_url, safe="")
-    proxy = f"https://api.scraperapi.com/?api_key={key}&url={quoted}"
-    ctx = _make_relaxed_ssl_context()
-    # Mask the api_key portion for logging
-    masked_proxy = proxy.replace(key, key[:4] + "***" + key[-4:]) if key else proxy
-    print(f"[youtube_client] scraperapi REST url: {masked_proxy[:240]}", flush=True)
-    req = urllib.request.Request(proxy, headers={"User-Agent": "Mozilla/5.0"})
-    try:
-        with urllib.request.urlopen(req, timeout=timeout, context=ctx) as r:
-            return r.read().decode("utf-8", errors="ignore")
-    except urllib.error.HTTPError as e:
-        err_body = e.read().decode("utf-8", errors="ignore")
-        raise RuntimeError(
-            f"ScraperAPI REST HTTP {e.code} on {target_url[:80]}: {err_body[:300]}"
-        ) from e
-
-
-def _http_get_json(url: str, timeout: int = 30) -> dict:
-    """Plain HTTPS GET, no proxy."""
-    ctx = _make_ssl_context()
-    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-    with urllib.request.urlopen(req, timeout=timeout, context=ctx) as r:
-        return json.loads(r.read().decode("utf-8"))
-
-
-# ---------------------------------------------------------------------------
-# Metadata via oEmbed
-# ---------------------------------------------------------------------------
-def _fetch_metadata_oembed(video_id: str) -> tuple[str, str, str]:
-    """oEmbed -> (title, author, published).
-    Uses ScraperAPI REST when key is set (avoids cloud SSL issues);
-    falls back to direct HTTPS otherwise.
-    """
-    # IMPORTANT: oEmbed only takes ?url=... and ?format=... (default json).
-    # We must NOT pass any other query params because ScraperAPI's
-    # api_key=...&url=... wrapper will eat the first '&' inside the
-    # url value (it'll think &format=json is a separate ScraperAPI
-    # query param). So keep target to a single ?url=... param, no
-    # format, no extra params.
-    target = (
-        f"https://www.youtube.com/oembed?url="
-        f"https://www.youtube.com/watch?v={video_id}"
-    )
-    sk = os.getenv("SCRAPER_API_KEY", "").strip()
-    print(f"[youtube_client] oembed: SCRAPER_API_KEY present={bool(sk)} len={len(sk)}", flush=True)
-    if sk:
-        print(f"[youtube_client] oembed: routing through ScraperAPI REST", flush=True)
-        body = _scraperapi_rest_get(target, timeout=30)
-        try:
-            data = json.loads(body)
-        except json.JSONDecodeError as e:
-            raise RuntimeError(f"oEmbed (via ScraperAPI) non-JSON: {body[:200]}") from e
-    else:
-        print(f"[youtube_client] oembed: SCRAPER_API_KEY empty, using direct HTTPS", flush=True)
-        data = _http_get_json(target)
-    return data.get("title", ""), data.get("author_name", ""), ""
 
 
 # ---------------------------------------------------------------------------
@@ -198,27 +101,23 @@ def _fetch_transcript(video_id: str) -> tuple[str, str]:
 # Main entry
 # ---------------------------------------------------------------------------
 def fetch_video(url: str) -> VideoInfo:
-    """Fetch metadata + transcript. Fails fast on any error."""
+    """Fetch transcript via youtube-transcript-api. Fails fast on error."""
     video_id = extract_video_id(url) or ""
     if not video_id:
         raise ValueError(f"Cannot parse YouTube video ID from URL: {url}")
 
-    title, channel, published = _fetch_metadata_oembed(video_id)
-    if not title:
-        raise RuntimeError(f"oEmbed returned empty title for video {video_id}")
-    logger.info(f"metadata: '{title[:60]}' channel='{channel}'")
-
     transcript, lang = _fetch_transcript(video_id)
-    logger.info(
-        f"transcript: lang={lang} chars={len(transcript)} via youtube-transcript-api"
+    print(
+        f"[youtube_client] transcript: lang={lang} chars={len(transcript)} for {video_id}",
+        flush=True,
     )
 
     return VideoInfo(
         video_id=video_id,
         url=url,
-        title=title,
-        channel=channel,
-        published=published,
+        title="",  # not fetched
+        channel="",  # not fetched
+        published="",  # not fetched
         transcript=transcript,
         caption_source="youtube-transcript-api",
     )
@@ -231,9 +130,7 @@ if __name__ == "__main__":
         print("Usage: python youtube_client.py <YOUTUBE_URL>")
         sys.exit(1)
     info = fetch_video(sys.argv[1])
-    print(f"Title: {info.title}")
-    print(f"Channel: {info.channel}")
-    print(f"Published: {info.published}")
-    print(f"Caption source: {info.caption_source}")
-    print(f"Transcript chars: {len(info.transcript)}")
+    print(f"video_id: {info.video_id}")
+    print(f"caption_source: {info.caption_source}")
+    print(f"transcript_chars: {len(info.transcript)}")
     print(f"First 500 chars: {info.transcript[:500]}")

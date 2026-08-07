@@ -121,15 +121,16 @@ def _fetch_metadata_oembed(video_id: str) -> tuple[str, str, str]:
         f"https://www.youtube.com/watch?v={video_id}&format=json"
     )
     sk = os.getenv("SCRAPER_API_KEY", "").strip()
-    logger.info(f"oembed: SCRAPER_API_KEY present={bool(sk)} len={len(sk)}")
+    print(f"[youtube_client] oembed: SCRAPER_API_KEY present={bool(sk)} len={len(sk)}", flush=True)
     if sk:
-        logger.info("oembed: routing through ScraperAPI REST")
+        print(f"[youtube_client] oembed: routing through ScraperAPI REST", flush=True)
         body = _scraperapi_rest_get(target, timeout=30)
         try:
             data = json.loads(body)
         except json.JSONDecodeError as e:
             raise RuntimeError(f"oEmbed (via ScraperAPI) non-JSON: {body[:200]}") from e
     else:
+        print(f"[youtube_client] oembed: SCRAPER_API_KEY empty, using direct HTTPS", flush=True)
         data = _http_get_json(target)
     return data.get("title", ""), data.get("author_name", ""), ""
 

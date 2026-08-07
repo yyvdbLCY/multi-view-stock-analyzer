@@ -56,11 +56,31 @@ def _setup_scraperapi_proxy() -> None:
     so that python `requests` (used by youtube-transcript-api) routes
     through ScraperAPI's HTTP CONNECT proxy.
 
+    Also set REQUESTS_CA_BUNDLE / SSL_CERT_FILE to certifi's CA bundle
+    so the proxied HTTPS handshake to YouTube uses up-to-date roots.
+
     Format: http://scraperapi:<KEY>@proxy-server.scraperapi.com:8001
     """
+    # Always: ensure certifi CA bundle is what `requests`/urllib3 uses.
+    # Some cloud runners ship a stale system bundle.
+    try:
+        import certifi
+        cafile = certifi.where()
+        os.environ["REQUESTS_CA_BUNDLE"] = cafile
+        os.environ["SSL_CERT_FILE"] = cafile
+        print(
+            f"[youtube_client] cert: using certifi bundle at {cafile}",
+            flush=True,
+        )
+    except Exception as e:
+        print(f"[youtube_client] cert: certifi load failed: {e}", flush=True)
+
     key = os.getenv("SCRAPER_API_KEY", "").strip()
     if not key:
-        logger.info("scraperapi: no SCRAPER_API_KEY, using direct YouTube access")
+        print(
+            "[youtube_client] scraperapi: no SCRAPER_API_KEY, using direct YouTube access",
+            flush=True,
+        )
         return
     proxy_url = f"http://scraperapi:{key}@proxy-server.scraperapi.com:8001"
     os.environ["HTTP_PROXY"] = proxy_url

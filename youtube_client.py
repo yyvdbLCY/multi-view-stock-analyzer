@@ -52,45 +52,22 @@ def extract_video_id(url: str) -> str | None:
 # ScraperAPI HTTP proxy setup
 # ---------------------------------------------------------------------------
 def _setup_scraperapi_proxy() -> None:
-    """If SCRAPER_API_KEY is set, configure HTTP/HTTPS_PROXY env vars
-    so that python `requests` (used by youtube-transcript-api) routes
-    through ScraperAPI's HTTP CONNECT proxy.
-
-    Also set REQUESTS_CA_BUNDLE / SSL_CERT_FILE to certifi's CA bundle
-    so the proxied HTTPS handshake to YouTube uses up-to-date roots.
-
-    Format: http://scraperapi:<KEY>@proxy-server.scraperapi.com:8001
+    """No-op now. We used to route youtube-transcript-api through
+    ScraperAPI's HTTP CONNECT proxy to bypass YouTube's datacenter IP
+    block. But the smoke-test diag (Aug 2026) showed:
+      - direct curl to YouTube from GitHub Actions: HTTP 200 (works!)
+      - curl via ScraperAPI CONNECT proxy: HTTP 401 (proxy rejects)
+    ScraperAPI's free plan doesn't grant access to the proxy-server
+    pool. So we just go direct.
     """
-    # Always: ensure certifi CA bundle is what `requests`/urllib3 uses.
-    # Some cloud runners ship a stale system bundle.
     try:
         import certifi
         cafile = certifi.where()
         os.environ["REQUESTS_CA_BUNDLE"] = cafile
         os.environ["SSL_CERT_FILE"] = cafile
-        print(
-            f"[youtube_client] cert: using certifi bundle at {cafile}",
-            flush=True,
-        )
-    except Exception as e:
-        print(f"[youtube_client] cert: certifi load failed: {e}", flush=True)
-
-    key = os.getenv("SCRAPER_API_KEY", "").strip()
-    if not key:
-        print(
-            "[youtube_client] scraperapi: no SCRAPER_API_KEY, using direct YouTube access",
-            flush=True,
-        )
-        return
-    proxy_url = f"http://scraperapi:{key}@proxy-server.scraperapi.com:8001"
-    os.environ["HTTP_PROXY"] = proxy_url
-    os.environ["HTTPS_PROXY"] = proxy_url
-    os.environ["https_proxy"] = proxy_url
-    os.environ["http_proxy"] = proxy_url
-    print(
-        f"[youtube_client] scraperapi: HTTP proxy configured (key len={len(key)})",
-        flush=True,
-    )
+    except Exception:
+        pass
+    print("[youtube_client] using direct YouTube access (no proxy)", flush=True)
 
 
 _setup_scraperapi_proxy()

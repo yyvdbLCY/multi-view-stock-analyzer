@@ -125,8 +125,8 @@ def extract_stocks_from_transcript(
 if __name__ == "__main__":
     # CLI smoke test
     import sys
+
     from youtube_client import fetch_video
-    import storage
 
     logging.basicConfig(level=logging.INFO)
     if len(sys.argv) < 2:

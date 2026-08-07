@@ -31,18 +31,17 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
-from fastapi import FastAPI, HTTPException, Request  # noqa: E402
-from telegram import Update  # noqa: E402
-from telegram.constants import ParseMode  # noqa: E402
-from telegram.ext import (  # noqa: E402
+from fastapi import FastAPI, HTTPException, Request
+from telegram import Update
+from telegram.ext import (
     Application,
     CommandHandler,
     MessageHandler,
     filters,
 )
 
-import config  # noqa: E402
-from main import (  # noqa: E402
+import config
+from main import (
     cmd_digest,
     cmd_help,
     cmd_report,
@@ -60,6 +59,14 @@ logging.basicConfig(
 )
 logger = logging.getLogger("multi-view-vercel")
 
+# Debug: confirm SCRAPER_API_KEY is actually visible at import time
+_scraper_key = os.getenv("SCRAPER_API_KEY", "")
+logger.info(
+    f"Boot: SCRAPER_API_KEY present={bool(_scraper_key)} "
+    f"len={len(_scraper_key)} "
+    f"first4={_scraper_key[:4]!r}"
+)
+
 # ---------------------------------------------------------------------------
 # Validate config early so we fail loud on bad env
 # ---------------------------------------------------------------------------
@@ -68,15 +75,6 @@ if missing:
     logger.error(f"Missing required env vars: {', '.join(missing)}")
     # Don't crash here — let the health endpoint show the error. Vercel will
     # log it and the user can fix env in the dashboard.
-
-# Debug: confirm SCRAPER_API_KEY is actually visible at import time
-import os as _os
-_scraper_key = _os.getenv("SCRAPER_API_KEY", "")
-logger.info(
-    f"Boot: SCRAPER_API_KEY present={bool(_scraper_key)} "
-    f"len={len(_scraper_key)} "
-    f"first4={_scraper_key[:4]!r}"
-)
 
 # Try to create local dirs (db/, reports/, logs/). On Vercel's read-only
 # filesystem this will silently no-op — the bot is stateless there anyway.
@@ -163,8 +161,8 @@ async def set_webhook_endpoint(request: Request) -> dict:
 
     # Call Telegram's setWebhook via raw HTTPS (avoid extra deps)
     import json as _json
-    import urllib.request
     import urllib.parse
+    import urllib.request
 
     telegram_url = f"https://api.telegram.org/bot{config.settings.telegram_bot_token}/setWebhook"
     data = urllib.parse.urlencode({"url": public_url}).encode()

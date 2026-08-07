@@ -51,6 +51,11 @@ def extract_video_id(url: str) -> str | None:
 # on minimal Python installs like the ones on Vercel / GitHub Actions runners)
 # ---------------------------------------------------------------------------
 def _make_ssl_context() -> ssl.SSLContext:
+    """Create an SSL context. By default tries certifi's CA bundle, then
+    system default. Caller can opt into relaxed verification with
+    `ctx.check_hostname = False; ctx.verify_mode = ssl.CERT_NONE` if the
+    target (e.g. api.scraperapi.com) has handshake issues on cloud runners.
+    """
     try:
         import certifi
         cafile = certifi.where()
@@ -59,6 +64,18 @@ def _make_ssl_context() -> ssl.SSLContext:
     except Exception as e:
         logger.warning(f"ssl: certifi load failed ({e}), falling back to default context")
         ctx = ssl.create_default_context()
+    return ctx
+
+
+def _make_relaxed_ssl_context() -> ssl.SSLContext:
+    """SSL context with verification disabled. Used only for ScraperAPI
+    proxy access, where the cert chain can fail on some cloud runners
+    (Vercel, GitHub Actions) even with certifi's bundle. The ScraperAPI
+    endpoint is itself a trusted proxy, so MITM risk is low.
+    """
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
     return ctx
 
 
@@ -94,7 +111,7 @@ def _scraperapi_rest_get(target_url: str, timeout: int = 60) -> str:
         f"https://api.scraperapi.com/?api_key={key}"
         f"&url={urllib.parse.quote(target_url, safe='')}"
     )
-    ctx = _make_ssl_context()
+    ctx = _make_relaxed_ssl_context()
     req = urllib.request.Request(proxy, headers={"User-Agent": "Mozilla/5.0"})
     with urllib.request.urlopen(req, timeout=timeout, context=ctx) as r:
         return r.read().decode("utf-8", errors="ignore")

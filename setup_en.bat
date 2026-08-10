@@ -53,53 +53,56 @@ echo      yt-dlp updated.
 echo.
 
 echo [3/6] Installing JavaScript runtime (Deno, required by new yt-dlp)...
-set "DENO=deno"
-%DENO% --version >nul 2>&1
-if errorlevel 1 (
-    where deno >nul 2>&1
-    if errorlevel 1 (
-        echo       deno not detected, trying winget...
-        where winget >nul 2>&1
-        if errorlevel 1 (
-            echo      [WARN] winget not found, using official install script...
-            goto :deno_script
-        )
-        winget install -e --id DenoLand.Deno --accept-package-agreements --accept-source-agreements --silent
-        if errorlevel 1 (
-            echo      winget install of Deno failed, falling back to official script...
-            goto :deno_script
-        ) else (
-            echo      Deno installed via winget (open a NEW CMD window for PATH to apply).
-            goto :deno_done
-        )
-    )
-) else (
-    echo      Deno already present:
-    %DENO% --version
-    goto :deno_done
-)
-:deno_script
+where deno >nul 2>&1
+if not errorlevel 1 goto deno_present
+where winget >nul 2>&1
+if not errorlevel 1 goto deno_winget
+echo      winget not found, using official install script...
 powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://deno.land/install.ps1 | iex"
-echo      Official Deno script ran. Default install path:
-echo       %%USERPROFILE%%\.deno\bin\deno.exe   (the GUI looks there automatically)
+echo      Official Deno script ran. Default install path is
+echo       %USERPROFILE%\.deno\bin\deno.exe   (the GUI looks there automatically)
+goto deno_done
+
+:deno_present
+echo      Deno already present:
+deno --version
+goto deno_done
+
+:deno_winget
+echo      installing Deno via winget...
+winget install -e --id DenoLand.Deno --accept-package-agreements --accept-source-agreements --silent
+if errorlevel 1 goto deno_script_fallback
+echo      Deno installed via winget (open a NEW CMD window for PATH to apply).
+goto deno_done
+
+:deno_script_fallback
+echo      winget Deno install failed, using official script...
+powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://deno.land/install.ps1 | iex"
+echo      Official Deno script ran. Default install path is
+echo       %USERPROFILE%\.deno\bin\deno.exe   (the GUI looks there automatically)
+
 :deno_done
 echo.
 
 echo [4/6] Checking ffmpeg...
 where ffmpeg >nul 2>&1
-if errorlevel 1 (
-    echo       ffmpeg not installed, installing via winget...
-    where winget >nul 2>&1
-    if errorlevel 1 (
-        echo      [WARN] winget not found; ffmpeg is optional for subtitles-only.
-        echo             To install later:  winget install Gyan.FFmpeg
-    ) else (
-        winget install -e --id Gyan.FFmpeg --accept-package-agreements --accept-source-agreements --silent
-    )
-) else (
-    echo      ffmpeg already present:
-    ffmpeg -version 2>nul | findstr /B "ffmpeg version"
-)
+if not errorlevel 1 goto ffmpeg_present
+where winget >nul 2>&1
+if not errorlevel 1 goto ffmpeg_winget
+echo      winget not found; ffmpeg is optional for subtitles-only.
+echo      To install later run:  winget install Gyan.FFmpeg
+goto ffmpeg_done
+
+:ffmpeg_present
+echo      ffmpeg already present:
+ffmpeg -version 2>nul | findstr /B "ffmpeg version"
+goto ffmpeg_done
+
+:ffmpeg_winget
+echo      installing ffmpeg via winget...
+winget install -e --id Gyan.FFmpeg --accept-package-agreements --accept-source-agreements --silent
+
+:ffmpeg_done
 echo.
 
 echo [5/6] Adding freshly-installed tool dirs to THIS window's PATH...

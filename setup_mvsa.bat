@@ -1,9 +1,11 @@
 @echo off
+chcp 65001 >nul
 REM =====================================================================
 REM  MVSA 家用電腦「一鍵安裝/修復」工具  (Windows 11 + Python 3.11+)
 REM  安裝/更新: yt-dlp, ffmpeg, JavaScript runtime (Deno)
 REM  最後自動測一支測試影片, 確認字幕能抓。
 REM  用法: 在 CMD 中執行  setup_mvsa.bat
+REM  ※ 本檔已加 chcp 65001, 中文可正常顯示。
 REM  ※ 新 yt-dlp (2026+) 抓 YouTube【必須】有 JS runtime, 本檔會裝 Deno。
 REM =====================================================================
 setlocal enabledelayedexpansion

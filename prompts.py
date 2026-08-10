@@ -45,7 +45,9 @@ Transcript:
 {transcript}
 ---
 
-Extract the stocks and analyst views as JSON per the schema. Output JSON only."""
+Extract the stocks and analyst views as JSON per the schema. Output JSON only.
+IMPORTANT: keep key_points SHORT (2-4 concise bullets each). Do not pad. This
+helps keep the output small and valid JSON."""
 
 
 # =============================================================================

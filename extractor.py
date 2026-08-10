@@ -23,14 +23,15 @@ _extract_model = genai.GenerativeModel(
     generation_config={
         "temperature": 0.1,  # low temp for structured extraction
         "top_p": 0.9,
-        "max_output_tokens": 4096,
+        "max_output_tokens": 8192,
         "response_mime_type": "application/json",
     },
 )
 
 
 def _extract_json(text: str) -> dict[str, Any]:
-    """Robust JSON extraction. Handles markdown fences or stray text."""
+    """Robust JSON extraction. Handles markdown fences, stray text, or a
+    token-truncated response (the model sometimes gets cut off mid-array)."""
     # Try direct parse first
     try:
         return json.loads(text)
@@ -45,16 +46,43 @@ def _extract_json(text: str) -> dict[str, Any]:
         except json.JSONDecodeError:
             pass
 
-    # Last resort: find first { ... last }
+    # Find first { ... last } then attempt self-healing if it looks truncated:
+    # incomplete array/object tail is a common cut-off (ends without ] } or with
+    # a dangling element such as "...waymo) i"). Try appending closers.
     start = text.find("{")
     end = text.rfind("}")
     if start >= 0 and end > start:
-        try:
-            return json.loads(text[start : end + 1])
-        except json.JSONDecodeError:
-            pass
+        for repaired in _heal_truncations(text[start:end + 1]):
+            try:
+                return json.loads(repaired)
+            except json.JSONDecodeError:
+                continue
 
     raise ValueError(f"Could not parse JSON from model output:\n{text[:500]}")
+
+
+def _heal_truncations(s: str) -> list[str]:
+    """Yield progressively-repaired versions of a possibly cut-off JSON string."""
+    # Close unclosed brackets by simple counting, then try parsing each candidate.
+    candidates = [s]
+    s2 = s + "]}"               # assume cut inside an array then object
+    candidates.append(s2)
+    if s.rstrip().endswith(","):
+        candidates.append(s.rstrip()[:-1] + "]}")
+    # balance arrays then objects
+    n_open = s.count("[") - s.count("]")
+    m_open = s.count("{") - s.count("}")
+    if n_open > 0:
+        candidates.append(s + "]" + "}" * max(m_open, 0))
+    if m_open > 0:
+        candidates.append(s + "}" * m_open)
+    # dedupe, preserve order
+    seen, result = set(), []
+    for c in candidates:
+        if c not in seen:
+            seen.add(c)
+            result.append(c)
+    return result
 
 
 def extract_stocks_from_transcript(

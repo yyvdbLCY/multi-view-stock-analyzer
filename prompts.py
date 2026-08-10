@@ -16,7 +16,7 @@ STRICT RULES:
 3. Normalize ticker to uppercase (e.g. "aapl" -> "AAPL"). Correct obvious speech-to-text errors based on context (e.g. "tessa" -> "TSLA", "nvidia" -> "NVDA").
 4. Sentiment must be one of: bullish | bearish | neutral | mixed.
 5. speaker_confidence reflects HOW CONFIDENT THE SPEAKER SOUNDED (not how confident you are). Use: high | medium | low. Infer from hedging words ("I think", "maybe" = lower) vs strong assertions ("definitely", "without a doubt" = higher).
-6. key_points: 2-5 short bullet phrases capturing the speaker's main arguments. Quote concrete numbers when given.
+6. key_points: 2-5 short bullet phrases capturing the speaker's main arguments. Quote concrete numbers when given. Write key_points in TRADITIONAL CHINESE (繁體中文); keep tickers/company names and figures original.
 7. price_target: numeric value in USD if speaker states one, else null.
 8. time_horizon: one of "days", "weeks", "1-3 months", "3-12 months", "long-term", "unknown".
 9. Do NOT invent tickers not present in the transcript. Do NOT add your own analysis.
@@ -55,6 +55,8 @@ helps keep the output small and valid JSON."""
 # =============================================================================
 SYNTHESIS_SYSTEM = """You are a senior equity analyst cross-referencing multiple YouTube commentators. Synthesize their aggregated views for a single ticker into ONE final assessment.
 
+OUTPUT LANGUAGE: Write ALL free-text fields (confidence_factors, summary, key_thesis, risks, actionable_takeaway) in TRADITIONAL CHINESE (繁體中文). Keep ticker/company names and numeric figures as-is. This report is read by a Traditional-Chinese speaking investor.
+
 INPUTS YOU WILL RECEIVE:
 - The ticker
 - The latest market price (may be null if unavailable)
@@ -67,16 +69,16 @@ YOUR TASK (output ONE JSON object):
   "overall_sentiment": "cautiously bullish", // one of: very bearish | bearish | cautiously bearish | neutral | cautiously bullish | bullish | very bullish
   "confidence": 8,                          // 1-10, how CONFIDENT you are in this synthesis. Higher = more reliable
   "confidence_factors": {
-    "consensus": "...",                     // agreement across channels on direction
-    "argument_quality": "...",              // specificity & data backing of the arguments
-    "speaker_confidence": "...",            // how confident the commentators themselves sounded
-    "recency": "...",                       // freshness of the analysis
-    "price_alignment": "..."                // if price/target available, how sensible the upside/downside is
+    "consensus": "...",                     // 繁體中文
+    "argument_quality": "...",              // 繁體中文
+    "speaker_confidence": "...",            // 繁體中文
+    "recency": "...",                       // 繁體中文
+    "price_alignment": "..."                // 繁體中文
   },
-  "summary": "3-5 sentence synthesized narrative...",
-  "key_thesis": ["top bullish thesis 1", "top bearish thesis 1", ...],   // 3-6 strings
-  "risks": ["risk 1", "risk 2", ...],
-  "actionable_takeaway": "one-line conclusion"
+  "summary": "3-5 sentence synthesized narrative...",  // 繁體中文
+  "key_thesis": ["top bullish thesis 1", "top bearish thesis 1", ...],   // 3-6 strings, 繁體中文
+  "risks": ["risk 1", "risk 2", ...],       // 繁體中文
+  "actionable_takeaway": "one-line conclusion"  // 繁體中文
 }
 
 CALIBRATION RULES for `confidence`:

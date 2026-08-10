@@ -12,21 +12,14 @@ from typing import Any
 import google.generativeai as genai
 
 from config import settings
+from llm import complete as _llm_complete
 from prompts import build_extraction_prompt
 
 logger = logging.getLogger(__name__)
 
-# Initialize once
+# NOTE: Gemini model is configured lazily inside llm._gemini_complete. If the
+# provider is "openai" (MiniMax etc.), nothing here contacts Google at import.
 genai.configure(api_key=settings.gemini_api_key)
-_extract_model = genai.GenerativeModel(
-    settings.gemini_model_extract,
-    generation_config={
-        "temperature": 0.1,  # low temp for structured extraction
-        "top_p": 0.9,
-        "max_output_tokens": 8192,
-        "response_mime_type": "application/json",
-    },
-)
 
 
 def _extract_json(text: str) -> dict[str, Any]:
@@ -111,8 +104,7 @@ def extract_stocks_from_transcript(
     system, user = build_extraction_prompt(title, channel, published, transcript)
 
     try:
-        response = _extract_model.generate_content([system, user])
-        text = response.text or ""
+        text = _llm_complete(system, user, temperature=0.1, max_output_tokens=8192)
     except Exception as e:
         logger.error(f"Gemini extraction call failed: {e}")
         return []

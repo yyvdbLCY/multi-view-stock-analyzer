@@ -13,20 +13,13 @@ from typing import Any
 import google.generativeai as genai
 
 from config import settings
+from llm import complete as _llm_complete
 from prompts import build_synthesis_prompt
 
 logger = logging.getLogger(__name__)
 
+# NOTE: Gemini model configured lazily inside llm._gemini_complete.
 genai.configure(api_key=settings.gemini_api_key)
-_eval_model = genai.GenerativeModel(
-    settings.gemini_model_eval,
-    generation_config={
-        "temperature": 0.3,
-        "top_p": 0.95,
-        "max_output_tokens": 4096,
-        "response_mime_type": "application/json",
-    },
-)
 
 
 def _extract_json(text: str) -> dict[str, Any]:
@@ -73,8 +66,7 @@ def synthesize_ticker(bundle: dict[str, Any]) -> dict[str, Any]:
     system, user = build_synthesis_prompt(ticker, latest_price, mentions_json)
 
     try:
-        response = _eval_model.generate_content([system, user])
-        text = response.text or ""
+        text = _llm_complete(system, user, temperature=0.3, max_output_tokens=8192)
         report = _extract_json(text)
     except Exception as e:
         logger.error(f"Synthesis failed for {ticker}: {e}")

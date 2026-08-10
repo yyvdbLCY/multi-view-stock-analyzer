@@ -40,6 +40,13 @@ class Settings:
     gemini_model_extract: str = os.getenv("GEMINI_MODEL_EXTRACT", "gemini-2.0-flash").strip()
     gemini_model_eval: str = os.getenv("GEMINI_MODEL_EVAL", "gemini-2.0-flash").strip()
 
+    # LLM provider switch: "gemini" (default) or "openai" (MiniMax / any OpenAI-compat)
+    llm_provider: str = os.getenv("LLM_PROVIDER", "gemini").strip().lower()
+    # OpenAI-compatible settings (used when LLM_PROVIDER=openai)
+    openai_base_url: str = os.getenv("OPENAI_BASE_URL", "https://api.minimax.io/v1").strip()
+    openai_api_key: str = os.getenv("OPENAI_API_KEY", "").strip()
+    openai_model: str = os.getenv("OPENAI_MODEL", "MiniMax-M3").strip()
+
     # Storage
     db_path: Path = _PROJECT_ROOT / os.getenv("DB_PATH", "db/analyzer.db")
     reports_dir: Path = _PROJECT_ROOT / os.getenv("REPORTS_DIR", "reports")
@@ -61,8 +68,16 @@ class Settings:
             missing.append("TELEGRAM_BOT_TOKEN")
         if not cls.telegram_allowed_user_ids:
             missing.append("TELEGRAM_ALLOWED_USER_IDS")
-        if not cls.gemini_api_key:
-            missing.append("GEMINI_API_KEY")
+        if cls.llm_provider == "openai":
+            if not cls.openai_api_key:
+                missing.append("OPENAI_API_KEY")
+            if not cls.openai_base_url:
+                missing.append("OPENAI_BASE_URL")
+            if not cls.openai_model:
+                missing.append("OPENAI_MODEL")
+        else:
+            if not cls.gemini_api_key:
+                missing.append("GEMINI_API_KEY")
         return missing
 
     @classmethod

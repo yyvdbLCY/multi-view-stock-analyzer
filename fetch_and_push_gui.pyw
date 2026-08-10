@@ -148,7 +148,15 @@ def fetch_transcript(url: str) -> dict:
         )
         subs = sorted(Path(td).glob("*.en*.vtt")) or sorted(Path(td).glob("*.vtt"))
         if proc.returncode != 0 or not subs:
-            err = (proc.stderr or proc.stdout).strip()[-400:]
+            full_err = (proc.stderr or proc.stdout or "").strip()
+            # 過濾掉 Python 棄用警告等無關行, 只留真正有用訊息
+            useful = [ln for ln in full_err.splitlines()
+                      if not ln.startswith("Deprecated Feature:")]
+            err = "\n".join(useful)[-600:] or full_err[-600:]
+            if proc.returncode == 0 and not subs:
+                raise RuntimeError(
+                    "yt-dlp 沒抓到字幕: 該影片可能沒有符合的字幕語言(英文 CC/自動字幕)。\n"
+                    f"{err}")
             raise RuntimeError(f"yt-dlp 無法抓字幕: {err}")
         text = _vtt_to_text(subs[0])
         if not text.strip():
